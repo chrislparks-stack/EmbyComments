@@ -1,0 +1,26 @@
+using System;
+using EmbyComments.Api;
+using MediaBrowser.Common.Configuration;
+using MediaBrowser.Common.Plugins;
+using MediaBrowser.Model.Serialization;
+
+namespace EmbyComments
+{
+    public class Plugin : BasePlugin<PluginConfiguration>
+    {
+        public static Plugin Instance { get; private set; }
+        public CommentsApiClient ApiClient { get; private set; }
+
+        public Plugin(IApplicationPaths appPaths, IXmlSerializer xmlSerializer)
+            : base(appPaths, xmlSerializer)
+        {
+            Instance = this;
+            ApiClient = new CommentsApiClient(Configuration.ApiEndpoint);
+        }
+
+        public override string Name => "Emby Comments";
+        public override string Description => "Community comments and ratings for movies and TV shows.";
+        public override Guid Id => new Guid("a4b7c2d1-e5f6-4a3b-8c9d-0e1f2a3b4c5d");
+        public override string ConfigurationFileName => "EmbyComments.xml";
+    }
+}
