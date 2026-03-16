@@ -12,7 +12,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <EmbeddedResource Include="Web\index.html" />
+    <EmbeddedResource Include="Web\config.html" />
+    <EmbeddedResource Include="Web\tab.html" />
+    <EmbeddedResource Include="Web\plugin.js" />
   </ItemGroup>
 
 </Project>
