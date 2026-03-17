@@ -28,17 +28,13 @@ namespace EmbyComments.Api
 
         public async Task Post(PostComment request)
         {
-            var plugin = Plugin.Instance;
-            var config = plugin.Configuration;
-
-            if (string.IsNullOrEmpty(config.DisplayName))
-                throw new InvalidOperationException("Please set your display name in plugin settings.");
+            if (string.IsNullOrEmpty(request.UserUuid))
+                throw new InvalidOperationException("UserUuid is required.");
 
             var comment = new Comment
             {
                 CommentId = Guid.NewGuid().ToString(),
-                OriginServerGuid = plugin.Id.ToString(),
-                AuthorDisplayName = config.DisplayName,
+                AuthorUuid = request.UserUuid,
                 MediaKey = request.MediaKey,
                 MediaTitle = request.MediaTitle ?? string.Empty,
                 Body = request.Body,
@@ -48,7 +44,7 @@ namespace EmbyComments.Api
                 IsDeleted = false
             };
 
-            await plugin.ApiClient.PostCommentAsync(comment);
+            await Plugin.Instance.ApiClient.PostCommentAsync(comment);
         }
     }
 }

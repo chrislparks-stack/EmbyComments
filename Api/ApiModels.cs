@@ -2,6 +2,7 @@ namespace EmbyComments.Api
 {
     public class PostCommentRequest
     {
+        public string UserUuid { get; set; }
         public string MediaKey { get; set; }
         public string MediaTitle { get; set; }
         public string Body { get; set; }
@@ -12,5 +13,6 @@ namespace EmbyComments.Api
     public class DeleteCommentRequest
     {
         public string CommentId { get; set; }
+        public string UserUuid { get; set; }
     }
 }

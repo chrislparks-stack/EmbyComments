@@ -31,13 +31,21 @@ namespace EmbyComments
             {
                 new PluginPageInfo
                 {
-                    Name = "embycommentsconfig",
-                    EmbeddedResourcePath = GetType().Namespace + ".Web.config.html"
+                    Name = "EmbyCommentsConfigPage",
+                    EmbeddedResourcePath = GetType().Namespace + ".Configuration.configPage.html",
+                    IsMainConfigPage = true
+                },
+                new PluginPageInfo
+                {
+                    Name = "embycommentsjs",
+                    EmbeddedResourcePath = GetType().Namespace + ".Configuration.configPage.js",
+                    IsMainConfigPage = false
                 },
                 new PluginPageInfo
                 {
                     Name = "embycommentsplugin.js",
-                    EmbeddedResourcePath = GetType().Namespace + ".Web.plugin.js"
+                    EmbeddedResourcePath = GetType().Namespace + ".Web.plugin.js",
+                    IsMainConfigPage = false
                 }
             };
         }
