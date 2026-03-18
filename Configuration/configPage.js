@@ -6,9 +6,27 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
     var POLL_INTERVAL = 5000;
     var MAX_POLL_ATTEMPTS = 10;
 
+    var SHIELD_SVG = '<svg viewBox="0 0 24 24" width="10" height="10" style="vertical-align:-1px;"><path fill="currentColor" d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-1 17.93C7.05 17.74 5 14.49 5 11V6.3l7-3.11 7 3.11V11c0 3.49-2.05 6.74-6 7.93V18h-1v.93zM10 14.17l-2.59-2.58L6 13l4 4 8-8-1.41-1.42L10 14.17z"/></svg>';
+
+    function findEntry(entries, userId) {
+        return (entries || []).find(function (e) { return e.UserId === userId; });
+    }
+
     function findDisplayName(entries, userId) {
-        var match = (entries || []).find(function (e) { return e.UserId === userId; });
-        return match ? match.DisplayName : '';
+        var entry = findEntry(entries, userId);
+        return entry ? entry.DisplayName : '';
+    }
+
+    function findAvatarBlob(entries, userId) {
+        var entry = findEntry(entries, userId);
+        return entry ? (entry.AvatarBlob || '') : '';
+    }
+
+    function getEmbyAvatarPath(user) {
+        if (user.PrimaryImageTag) {
+            return 'Users/' + user.Id + '/Images/Primary?maxheight=64&quality=80';
+        }
+        return '';
     }
 
     function setLoading(view) {
@@ -44,8 +62,6 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
             instance.originalValues[input.dataset.userId] = input.value.trim();
         });
     }
-
-    var SHIELD_SVG = '<svg viewBox="0 0 24 24" width="10" height="10" style="vertical-align:-1px;"><path fill="currentColor" d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-1 17.93C7.05 17.74 5 14.49 5 11V6.3l7-3.11 7 3.11V11c0 3.49-2.05 6.74-6 7.93V18h-1v.93zM10 14.17l-2.59-2.58L6 13l4 4 8-8-1.41-1.42L10 14.17z"/></svg>';
 
     function setNameStatus(warning, status, reason) {
         if (status === 'awaiting') {
@@ -83,8 +99,40 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
             var row = document.createElement('div');
             row.style.cssText = 'display:flex; align-items:center; gap:1em; margin-bottom:1em;';
 
+            // Avatar preview
+            var avatarWrap = document.createElement('div');
+            avatarWrap.style.cssText = 'flex-shrink:0; width:40px; height:40px; border-radius:50%; overflow:hidden; background:var(--theme-text-color-secondary, #888); display:flex; align-items:center; justify-content:center;';
+
+            var storedAvatar = findAvatarBlob(entries, user.Id);
+            var embyAvatar = getEmbyAvatarPath(user);
+            var avatarPath = storedAvatar || embyAvatar;
+
+            if (avatarPath) {
+                var img = document.createElement('img');
+                img.style.cssText = 'width:100%; height:100%; object-fit:cover;';
+                img.src = ApiClient.getUrl(avatarPath);
+                img.onerror = function () {
+                    this.style.display = 'none';
+                    var fallback = document.createElement('span');
+                    fallback.style.cssText = 'color:white; font-weight:600; font-size:0.85em;';
+                    fallback.textContent = user.Name.charAt(0).toUpperCase();
+                    avatarWrap.appendChild(fallback);
+                };
+                avatarWrap.appendChild(img);
+            } else {
+                var fallback = document.createElement('span');
+                fallback.style.cssText = 'color:white; font-weight:600; font-size:0.85em;';
+                fallback.textContent = user.Name.charAt(0).toUpperCase();
+                avatarWrap.appendChild(fallback);
+            }
+
+            // Store avatar path on the row for saving
+            avatarWrap.dataset.userId = user.Id;
+            avatarWrap.dataset.avatarPath = avatarPath;
+            avatarWrap.className = 'ec-cfg-avatar';
+
             var label = document.createElement('div');
-            label.style.cssText = 'min-width:160px; font-weight:bold; color:var(--theme-text-color,#fff);';
+            label.style.cssText = 'min-width:120px; font-weight:bold; color:inherit;';
             label.textContent = user.Name;
 
             var inputWrap = document.createElement('div');
@@ -126,6 +174,7 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
             statusRow.appendChild(warning);
             statusRow.appendChild(counter);
             inputWrap.appendChild(statusRow);
+            row.appendChild(avatarWrap);
             row.appendChild(label);
             row.appendChild(inputWrap);
             userList.appendChild(row);
@@ -141,7 +190,7 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
         var serverId = ApiClient.serverId();
         users.forEach(function (user) {
             var customName = findDisplayName(entries, user.Id);
-            if (!customName) return; // Default names don't need status checks
+            if (!customName) return;
 
             var userKey = serverId + ':' + user.Id;
             ApiClient.ajax({
@@ -170,7 +219,6 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
         instance.pollCount = 0;
         var serverId = ApiClient.serverId();
 
-        // Build list of users that need polling (custom names only)
         var pendingUsers = [];
         inputs.forEach(function (input) {
             var name = input.value.trim();
@@ -185,7 +233,6 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
 
         if (pendingUsers.length === 0) return;
 
-        // Show awaiting status for all custom names immediately
         pendingUsers.forEach(function (pu) {
             var warning = instance.view.querySelector('.ec-cfg-name-warning[data-user-id="' + pu.userId + '"]');
             if (warning) setNameStatus(warning, 'awaiting');
@@ -246,6 +293,26 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
                 ApiClient.getPluginConfiguration(pluginId).then(function (config) {
                     instance.apiEndpoint = config.ApiEndpoint;
                     var entries = config.UserDisplayNames || [];
+
+                    // Auto-populate avatar paths for users that don't have one stored
+                    var needsSave = false;
+                    users.forEach(function (user) {
+                        var entry = findEntry(entries, user.Id);
+                        var embyAvatar = getEmbyAvatarPath(user);
+                        if (entry && !entry.AvatarBlob && embyAvatar) {
+                            entry.AvatarBlob = embyAvatar;
+                            needsSave = true;
+                        } else if (!entry && embyAvatar) {
+                            entries.push({ UserId: user.Id, DisplayName: '', AvatarBlob: embyAvatar });
+                            needsSave = true;
+                        }
+                    });
+
+                    if (needsSave && isAdmin) {
+                        config.UserDisplayNames = entries;
+                        ApiClient.updatePluginConfiguration(pluginId, config).catch(function () {});
+                    }
+
                     renderUsers(instance, users, entries, isAdmin);
                     loading.hide();
                 });
@@ -294,8 +361,13 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
             var entries = [];
             var inputs = view.querySelectorAll('input[data-user-id]');
             inputs.forEach(function (input) {
+                var userId = input.dataset.userId;
                 var val = input.value.trim();
-                if (val) entries.push({ UserId: input.dataset.userId, DisplayName: val });
+                var avatarEl = view.querySelector('.ec-cfg-avatar[data-user-id="' + userId + '"]');
+                var avatarPath = avatarEl ? (avatarEl.dataset.avatarPath || '') : '';
+                if (val || avatarPath) {
+                    entries.push({ UserId: userId, DisplayName: val, AvatarBlob: avatarPath });
+                }
             });
 
             ApiClient.getPluginConfiguration(pluginId).then(function (config) {
@@ -306,7 +378,6 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
             }).then(function () {
                 trackOriginalValues(instance);
                 saveBtn.disabled = true;
-                // Clear statuses for default names, keep for custom
                 view.querySelectorAll('.ec-cfg-name-warning').forEach(function (w) {
                     var input = view.querySelector('input[data-user-id="' + w.dataset.userId + '"]');
                     if (input && !input.value.trim()) {
@@ -314,7 +385,6 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
                     }
                 });
                 showStatus(view, 'Settings saved.');
-                // Start polling for moderation results
                 startModerationPoll(instance, inputs);
             }).catch(function (err) {
                 console.error('[EmbyComments] save failed:', err);

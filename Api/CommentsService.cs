@@ -66,7 +66,7 @@ namespace EmbyComments.Api
 
             var config = Plugin.Instance.Configuration;
 
-            // If not yet provisioned, only admin can set it up
+            // If API key or WAN address missing, only admin can provision
             if (string.IsNullOrEmpty(config.EmbyApiKey) || string.IsNullOrEmpty(config.WanAddress))
             {
                 var authInfo = _authContext.GetAuthorizationInfo(Request);
@@ -85,10 +85,53 @@ namespace EmbyComments.Api
                 }
             }
 
+            // ServerId can be fetched without admin via public endpoint
+            if (string.IsNullOrEmpty(config.ServerId))
+            {
+                try
+                {
+                    var localBaseUrl = $"http://localhost:{_appHost.HttpPort}";
+                    var resp = await _httpClient.GetAsync($"{localBaseUrl}/emby/System/Info/Public");
+                    resp.EnsureSuccessStatusCode();
+                    var json = await resp.Content.ReadAsStringAsync();
+                    using var doc = JsonDocument.Parse(json);
+                    var id = doc.RootElement.TryGetProperty("Id", out var sid) ? sid.GetString() : null;
+                    if (!string.IsNullOrEmpty(id))
+                    {
+                        config.ServerId = id;
+                        Plugin.Instance.SaveConfiguration();
+                    }
+                }
+                catch { /* will retry next request */ }
+            }
+
+            if (string.IsNullOrEmpty(config.ServerId))
+                return new { error = "Could not determine server ID. Please restart Emby and try again." };
+
+            // Fetch avatar from Emby: parse userId from UserKey (format: serverId:userId)
+            var avatarBlob = string.Empty;
+            var parts = request.UserKey?.Split(':');
+            if (parts != null && parts.Length == 2)
+            {
+                try
+                {
+                    var embyUserId = parts[1];
+                    var localBaseUrl = $"http://localhost:{_appHost.HttpPort}";
+                    var avatarResp = await _httpClient.GetAsync($"{localBaseUrl}/emby/Users/{embyUserId}/Images/Primary?maxheight=64&quality=80");
+                    if (avatarResp.IsSuccessStatusCode)
+                    {
+                        var bytes = await avatarResp.Content.ReadAsByteArrayAsync();
+                        var contentType = avatarResp.Content.Headers.ContentType?.MediaType ?? "image/jpeg";
+                        avatarBlob = $"data:{contentType};base64,{Convert.ToBase64String(bytes)}";
+                    }
+                }
+                catch { /* no avatar, fallback to colored initial */ }
+            }
+
             // Now proxy to Worker /token
             try
             {
-                var json = await Plugin.Instance.ApiClient.RequestTokenAsync(request.UserKey, request.DisplayName);
+                var json = await Plugin.Instance.ApiClient.RequestTokenAsync(request.UserKey, request.DisplayName, avatarBlob);
                 return DeserializeJson(json);
             }
             catch (Exception ex)
@@ -206,8 +249,8 @@ namespace EmbyComments.Api
                 }
             }
 
-            // Step 2: Fetch WAN address using admin token (API key doesn't return network info)
-            if (string.IsNullOrEmpty(config.WanAddress))
+            // Step 2: Fetch WAN address and Server ID using admin token (API key doesn't return network info)
+            if (string.IsNullOrEmpty(config.WanAddress) || string.IsNullOrEmpty(config.ServerId))
             {
                 var infoRequest = new HttpRequestMessage(HttpMethod.Get, $"{localBaseUrl}/emby/System/Info");
                 infoRequest.Headers.Add("X-Emby-Token", adminToken);
@@ -222,6 +265,10 @@ namespace EmbyComments.Api
                     throw new InvalidOperationException("Could not determine server WAN address. Ensure your Emby server has remote access configured.");
 
                 config.WanAddress = wanAddress;
+
+                var serverId = infoDoc.RootElement.TryGetProperty("Id", out var sid) ? sid.GetString() : null;
+                if (!string.IsNullOrEmpty(serverId))
+                    config.ServerId = serverId;
             }
 
             // Save config to XML

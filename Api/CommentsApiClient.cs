@@ -25,11 +25,7 @@ namespace EmbyComments.Api
         private string WanAddress => Plugin.Instance.Configuration.WanAddress ?? string.Empty;
         private string EmbyApiKey => Plugin.Instance.Configuration.EmbyApiKey ?? string.Empty;
 
-        /// <summary>
-        /// Calls /token on the Worker. Sends server credentials for verification.
-        /// Returns raw JSON: { UserUuid, ModerationStatus, token, expiresAt }
-        /// </summary>
-        public async Task<string> RequestTokenAsync(string userKey, string displayName)
+        public async Task<string> RequestTokenAsync(string userKey, string displayName, string avatarBlob = null)
         {
             var url = $"{ApiEndpoint}/token";
             var payload = new
@@ -38,7 +34,8 @@ namespace EmbyComments.Api
                 WanAddress = WanAddress,
                 ApiKey = EmbyApiKey,
                 UserKey = userKey,
-                DisplayName = displayName
+                DisplayName = displayName,
+                AvatarBlob = avatarBlob ?? string.Empty
             };
             var json = JsonSerializer.Serialize(payload, _jsonOptions);
             var content = new StringContent(json, Encoding.UTF8, "application/json");
