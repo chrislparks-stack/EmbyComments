@@ -1,40 +1,79 @@
 using System;
-using System.Collections.Generic;
 using System.Net.Http;
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Threading.Tasks;
-using EmbyComments.Model;
 
 namespace EmbyComments.Api
 {
     public class CommentsApiClient
     {
         private readonly HttpClient _httpClient;
-        private readonly string _apiEndpoint;
+        private static readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions
+        {
+            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+        };
 
-        public CommentsApiClient(string apiEndpoint)
+        public CommentsApiClient()
         {
             _httpClient = new HttpClient();
-            _apiEndpoint = apiEndpoint.TrimEnd('/');
         }
 
-        public async Task<List<Comment>> GetCommentsAsync(string mediaKey)
-        {
-            var url = $"{_apiEndpoint}/comments?mediaKey={Uri.EscapeDataString(mediaKey)}";
-            var response = await _httpClient.GetAsync(url);
-            response.EnsureSuccessStatusCode();
-            var json = await response.Content.ReadAsStringAsync();
-            return JsonSerializer.Deserialize<List<Comment>>(json);
-        }
+        private string ApiEndpoint => Plugin.Instance.Configuration.ApiEndpoint.TrimEnd('/');
+        private string ServerGuid => Plugin.Instance.Configuration.ServerId ?? string.Empty;
+        private string WanAddress => Plugin.Instance.Configuration.WanAddress ?? string.Empty;
+        private string EmbyApiKey => Plugin.Instance.Configuration.EmbyApiKey ?? string.Empty;
 
-        public async Task PostCommentAsync(Comment comment)
+        /// <summary>
+        /// Calls /token on the Worker. Sends server credentials for verification.
+        /// Returns raw JSON: { UserUuid, ModerationStatus, token, expiresAt }
+        /// </summary>
+        public async Task<string> RequestTokenAsync(string userKey, string displayName)
         {
-            var url = $"{_apiEndpoint}/comments";
-            var json = JsonSerializer.Serialize(comment);
+            var url = $"{ApiEndpoint}/token";
+            var payload = new
+            {
+                ServerGuid = ServerGuid,
+                WanAddress = WanAddress,
+                ApiKey = EmbyApiKey,
+                UserKey = userKey,
+                DisplayName = displayName
+            };
+            var json = JsonSerializer.Serialize(payload, _jsonOptions);
             var content = new StringContent(json, Encoding.UTF8, "application/json");
+
             var response = await _httpClient.PostAsync(url, content);
-            response.EnsureSuccessStatusCode();
+            var body = await response.Content.ReadAsStringAsync();
+            if (!response.IsSuccessStatusCode)
+                throw new HttpRequestException($"Worker /token returned {(int)response.StatusCode}: {body}");
+            return body;
+        }
+
+        /// <summary>
+        /// Calls /register on the Worker. Sends server credentials for verification.
+        /// Returns raw JSON: { UserUuid, ModerationStatus }
+        /// </summary>
+        public async Task<string> RegisterNameAsync(string userKey, string displayName, bool checkOnly = false)
+        {
+            var url = $"{ApiEndpoint}/register";
+            var payload = new
+            {
+                ServerGuid = ServerGuid,
+                WanAddress = WanAddress,
+                ApiKey = EmbyApiKey,
+                UserKey = userKey,
+                DisplayName = displayName,
+                CheckOnly = checkOnly
+            };
+            var json = JsonSerializer.Serialize(payload, _jsonOptions);
+            var content = new StringContent(json, Encoding.UTF8, "application/json");
+
+            var response = await _httpClient.PostAsync(url, content);
+            var body = await response.Content.ReadAsStringAsync();
+            if (!response.IsSuccessStatusCode)
+                throw new HttpRequestException($"Worker /register returned {(int)response.StatusCode}: {body}");
+            return body;
         }
     }
 }

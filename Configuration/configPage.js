@@ -2,7 +2,9 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
     'use strict';
 
     var pluginId = 'a4b7c2d1-e5f6-4a3b-8c9d-0e1f2a3b4c5d';
-    var MAX_NAME_LENGTH = 30;
+    var MAX_NAME_LENGTH = 50;
+    var POLL_INTERVAL = 5000;
+    var MAX_POLL_ATTEMPTS = 10;
 
     function findDisplayName(entries, userId) {
         var match = (entries || []).find(function (e) { return e.UserId === userId; });
@@ -43,6 +45,26 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
         });
     }
 
+    var SHIELD_SVG = '<svg viewBox="0 0 24 24" width="10" height="10" style="vertical-align:-1px;"><path fill="currentColor" d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-1 17.93C7.05 17.74 5 14.49 5 11V6.3l7-3.11 7 3.11V11c0 3.49-2.05 6.74-6 7.93V18h-1v.93zM10 14.17l-2.59-2.58L6 13l4 4 8-8-1.41-1.42L10 14.17z"/></svg>';
+
+    function setNameStatus(warning, status, reason) {
+        if (status === 'awaiting') {
+            warning.innerHTML = SHIELD_SVG + ' Waiting for moderation';
+            warning.style.color = '#3498db';
+            warning.style.display = 'inline';
+        } else if (status === 'approved') {
+            warning.innerHTML = '\u2714 Custom name approved';
+            warning.style.color = '#2ecc71';
+            warning.style.display = 'inline';
+        } else if (status === 'denied') {
+            warning.innerHTML = '\u26A0 ' + (reason || 'This name was flagged and cannot post comments');
+            warning.style.color = 'var(--theme-error-color, #e74c3c)';
+            warning.style.display = 'inline';
+        } else {
+            warning.style.display = 'none';
+        }
+    }
+
     function renderUsers(instance, users, entries, isAdmin) {
         var view = instance.view;
         var userList = view.querySelector('.embyCommentsUserList');
@@ -78,22 +100,32 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
             input.dataset.userId = user.Id;
             input.dataset.defaultName = user.Name;
 
-            var counter = document.createElement('div');
-            counter.style.cssText = 'font-size:0.75em; text-align:right; margin-top:2px; color:var(--theme-text-color-secondary, #888);';
+            var counter = document.createElement('span');
+            counter.style.cssText = 'font-size:0.75em; color:var(--theme-text-color-secondary, #888);';
             var currentLen = input.value.length;
             counter.textContent = currentLen > 0 ? currentLen + ' / ' + MAX_NAME_LENGTH : '';
 
+            var warning = document.createElement('span');
+            warning.className = 'ec-cfg-name-warning';
+            warning.style.cssText = 'display:none; font-size:0.75em;';
+            warning.dataset.userId = user.Id;
+
+            var statusRow = document.createElement('div');
+            statusRow.style.cssText = 'display:flex; justify-content:space-between; align-items:center; margin-top:2px;';
+
             input.addEventListener('input', function () {
-                // Strip anything that isn't alphanumeric, spaces, hyphens, underscores, or periods
-                this.value = this.value.replace(/[^a-zA-Z0-9 _\-\.]/g, '');
+                this.value = this.value.replace(/[\x00-\x1F\x7F-\x9F\u200B-\u200F\u2028-\u202F\uFEFF]/g, '');
                 var len = this.value.length;
                 counter.textContent = len > 0 ? len + ' / ' + MAX_NAME_LENGTH : '';
                 counter.style.color = len >= MAX_NAME_LENGTH ? 'var(--theme-error-color, #e74c3c)' : 'var(--theme-text-color-secondary, #888)';
+                warning.style.display = 'none';
                 saveBtn.disabled = !hasChanges(instance);
             });
 
             inputWrap.appendChild(input);
-            inputWrap.appendChild(counter);
+            statusRow.appendChild(warning);
+            statusRow.appendChild(counter);
+            inputWrap.appendChild(statusRow);
             row.appendChild(label);
             row.appendChild(inputWrap);
             userList.appendChild(row);
@@ -101,6 +133,106 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
 
         trackOriginalValues(instance);
         saveBtn.disabled = true;
+
+        checkNameModerationStatuses(instance, users, entries);
+    }
+
+    function checkNameModerationStatuses(instance, users, entries) {
+        var serverId = ApiClient.serverId();
+        users.forEach(function (user) {
+            var customName = findDisplayName(entries, user.Id);
+            if (!customName) return; // Default names don't need status checks
+
+            var userKey = serverId + ':' + user.Id;
+            ApiClient.ajax({
+                type: 'POST',
+                url: ApiClient.getUrl('embycomments/register-name'),
+                dataType: 'json',
+                contentType: 'application/json',
+                data: JSON.stringify({ UserKey: userKey, DisplayName: customName, CheckOnly: true })
+            }).then(function (data) {
+                var warning = instance.view.querySelector('.ec-cfg-name-warning[data-user-id="' + user.Id + '"]');
+                if (!warning) return;
+
+                if (data.ModerationStatus === 'denied') {
+                    setNameStatus(warning, 'denied');
+                } else if (data.ModerationStatus === 'approved') {
+                    setNameStatus(warning, 'approved');
+                } else if (data.ModerationStatus === 'awaiting') {
+                    setNameStatus(warning, 'awaiting');
+                }
+            }).catch(function () {});
+        });
+    }
+
+    function startModerationPoll(instance, inputs) {
+        if (instance.pollTimer) { clearInterval(instance.pollTimer); }
+        instance.pollCount = 0;
+        var serverId = ApiClient.serverId();
+
+        // Build list of users that need polling (custom names only)
+        var pendingUsers = [];
+        inputs.forEach(function (input) {
+            var name = input.value.trim();
+            if (name) {
+                pendingUsers.push({
+                    userId: input.dataset.userId,
+                    userKey: serverId + ':' + input.dataset.userId,
+                    displayName: name
+                });
+            }
+        });
+
+        if (pendingUsers.length === 0) return;
+
+        // Show awaiting status for all custom names immediately
+        pendingUsers.forEach(function (pu) {
+            var warning = instance.view.querySelector('.ec-cfg-name-warning[data-user-id="' + pu.userId + '"]');
+            if (warning) setNameStatus(warning, 'awaiting');
+        });
+
+        instance.pollTimer = setInterval(function () {
+            instance.pollCount++;
+            if (instance.pollCount >= MAX_POLL_ATTEMPTS || pendingUsers.length === 0) {
+                clearInterval(instance.pollTimer);
+                instance.pollTimer = null;
+                return;
+            }
+
+            var remaining = [];
+            var checksDone = 0;
+            pendingUsers.forEach(function (pu) {
+                ApiClient.ajax({
+                    type: 'POST',
+                    url: ApiClient.getUrl('embycomments/register-name'),
+                    dataType: 'json',
+                    contentType: 'application/json',
+                    data: JSON.stringify({ UserKey: pu.userKey, DisplayName: pu.displayName, CheckOnly: true })
+                }).then(function (data) {
+                    var warning = instance.view.querySelector('.ec-cfg-name-warning[data-user-id="' + pu.userId + '"]');
+                    if (!warning) return;
+
+                    if (data.ModerationStatus === 'approved') {
+                        setNameStatus(warning, 'approved');
+                    } else if (data.ModerationStatus === 'denied') {
+                        setNameStatus(warning, 'denied');
+                    } else {
+                        remaining.push(pu);
+                    }
+                }).catch(function () {
+                    remaining.push(pu);
+                }).finally(function () {
+                    checksDone++;
+                    if (checksDone === pendingUsers.length) {
+                        pendingUsers = remaining;
+                        if (pendingUsers.length === 0) {
+                            clearInterval(instance.pollTimer);
+                            instance.pollTimer = null;
+                        }
+                    }
+                });
+            });
+        }, POLL_INTERVAL);
     }
 
     function loadConfig(instance) {
@@ -125,7 +257,6 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
     }
 
     function syncDisplayNamesToWorker(instance, inputs) {
-        if (!instance.apiEndpoint) return Promise.resolve();
         var serverId = ApiClient.serverId();
         var promises = [];
 
@@ -135,10 +266,12 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
             var userKey = serverId + ':' + userId;
 
             promises.push(
-                fetch(instance.apiEndpoint + '/register', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ UserKey: userKey, DisplayName: name })
+                ApiClient.ajax({
+                    type: 'POST',
+                    url: ApiClient.getUrl('embycomments/register-name'),
+                    dataType: 'json',
+                    contentType: 'application/json',
+                    data: JSON.stringify({ UserKey: userKey, DisplayName: name })
                 }).catch(function () { /* best effort */ })
             );
         });
@@ -169,12 +302,20 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
                 config.UserDisplayNames = entries;
                 return ApiClient.updatePluginConfiguration(pluginId, config);
             }).then(function () {
-                // Sync to Cloudflare worker
                 return syncDisplayNamesToWorker(instance, inputs);
             }).then(function () {
                 trackOriginalValues(instance);
                 saveBtn.disabled = true;
+                // Clear statuses for default names, keep for custom
+                view.querySelectorAll('.ec-cfg-name-warning').forEach(function (w) {
+                    var input = view.querySelector('input[data-user-id="' + w.dataset.userId + '"]');
+                    if (input && !input.value.trim()) {
+                        w.style.display = 'none';
+                    }
+                });
                 showStatus(view, 'Settings saved.');
+                // Start polling for moderation results
+                startModerationPoll(instance, inputs);
             }).catch(function (err) {
                 console.error('[EmbyComments] save failed:', err);
                 showStatus(view, 'Save failed: ' + (err.message || JSON.stringify(err)), true);
@@ -186,6 +327,8 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
         BaseView.apply(this, arguments);
         this.originalValues = {};
         this.apiEndpoint = null;
+        this.pollTimer = null;
+        this.pollCount = 0;
         var instance = this;
         view.querySelector('form').addEventListener('submit', function (e) { onSubmit(instance, e); });
     }
@@ -199,6 +342,7 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
 
     View.prototype.onPause = function () {
         BaseView.prototype.onPause.apply(this, arguments);
+        if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; }
         setLoading(this.view);
         this.originalValues = {};
     };

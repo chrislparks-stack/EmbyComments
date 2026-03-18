@@ -15,7 +15,12 @@ namespace EmbyComments
         public List<UserDisplayNameEntry> UserDisplayNames { get; set; } = new List<UserDisplayNameEntry>();
         public string ApiEndpoint { get; set; } = "https://emby-comments-worker.embycomments.workers.dev";
 
-        // Helper methods for easy lookup
+        public string EmbyApiKey { get; set; } = string.Empty;
+
+        public string WanAddress { get; set; } = string.Empty;
+
+        public string ServerId { get; set; } = string.Empty;
+
         public string GetDisplayName(string userId)
         {
             return UserDisplayNames.FirstOrDefault(e => e.UserId == userId)?.DisplayName ?? string.Empty;

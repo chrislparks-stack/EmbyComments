@@ -17,7 +17,7 @@ namespace EmbyComments
             : base(appPaths, xmlSerializer)
         {
             Instance = this;
-            ApiClient = new CommentsApiClient(Configuration.ApiEndpoint);
+            ApiClient = new CommentsApiClient();
         }
 
         public override string Name => "Emby Comments";
