@@ -311,14 +311,15 @@ define([], function () {
             '.ec-avg-meta { font-size:0.75em; opacity:0.55; }' +
             '.ec-spark { flex-shrink:0; } .ec-spark svg { display:block; }' +
             '.ec-name-warning { display:none; align-items:center; gap:0.5em; padding:0.6em 1em; margin-bottom:0.6em; border-radius:8px; background:rgba(231,76,60,0.1); border:1px solid rgba(231,76,60,0.25); color:#e74c3c; font-size:0.85em; }' +
-            '.ec-form-toggle { background:color-mix(in srgb, currentColor 5%, transparent); border:1px solid color-mix(in srgb, currentColor 10%, transparent); border-radius:8px; color:inherit; opacity:0.5; cursor:pointer; font-size:0.85em; font-family:inherit; padding:0.6em 1em; margin-bottom:0.6em; display:block; width:100%; text-align:left; transition:all 0.2s; }' +
+            '.ec-form-toggle { background:color-mix(in srgb, currentColor 5%, transparent); border:1px solid color-mix(in srgb, currentColor 10%, transparent); border-radius:8px; color:inherit; opacity:0.5; cursor:pointer; font-size:0.85em; font-family:inherit; padding:0.6em 1em; margin-bottom:0.6em; display:block; width:100%; text-align:left; transition:all 0.2s; backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); }' +
             '.ec-form-toggle:hover { opacity:0.7; background:color-mix(in srgb, currentColor 8%, transparent); }' +
             '.ec-form { display:none; margin-bottom:0.8em; position:relative; } .ec-form.open { display:block; }' +
-            '.ec-form-close { position:absolute; top:0; right:0; background:none; border:none; color:inherit; opacity:0.3; cursor:pointer; font-size:1.1em; line-height:1; padding:2px 6px; border-radius:4px; transition:opacity 0.15s; } .ec-form-close:hover { opacity:0.7; }' +
+            '.ec-form-head { display:flex; align-items:center; justify-content:space-between; gap:0.75em; margin-bottom:0.35em; }' +
+            '.ec-form-close { background:none; border:none; color:inherit; opacity:0.3; cursor:pointer; font-size:1.1em; line-height:1; padding:2px 6px; border-radius:4px; transition:opacity 0.15s, background 0.15s; flex-shrink:0; } .ec-form-close:hover { opacity:0.7; background:color-mix(in srgb, currentColor 5%, transparent); }' +
             '.ec-form-footer { display:flex; align-items:center; gap:0.8em; margin-top:0.4em; }' +
-            '.ec-stars { display:flex; gap:2px; margin:0.3em 0 0.5em 0; cursor:pointer; }' +
+            '.ec-stars { display:flex; gap:2px; margin:0; cursor:pointer; flex-wrap:wrap; }' +            
             '.ec-stars span { font-size:1.3em; color: color-mix(in srgb, currentColor 25%, transparent); transition:color 0.15s, opacity 0.15s; } .ec-stars span.active { color:#f5c518; opacity:1; }' +
-            '.ec-textarea { width:100%; min-height:60px; background:color-mix(in srgb, currentColor 5%, transparent); border:1px solid color-mix(in srgb, currentColor 10%, transparent); border-radius:8px; color:inherit; padding:0.6em; font-size:0.85em; font-family:inherit; resize:vertical; box-sizing:border-box; outline:none; transition:all 0.2s; }' +
+            '.ec-textarea { width:100%; min-height:60px; background:color-mix(in srgb, currentColor 5%, transparent); border:1px solid color-mix(in srgb, currentColor 10%, transparent); border-radius:8px; color:inherit; padding:0.6em; font-size:0.85em; font-family:inherit; resize:vertical; box-sizing:border-box; outline:none; transition:all 0.2s; backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); }' +
             '.ec-textarea:focus { border-color:var(--theme-accent-text-color, #00a4dc); background:color-mix(in srgb, currentColor 8%, transparent); }' +
             '.ec-spoiler-check { display:flex; align-items:center; gap:0.4em; font-size:0.78em; color:color-mix(in srgb, #9b59b6 80%, currentColor); cursor:pointer; padding:3px 10px; border-radius:4px; border:1px solid color-mix(in srgb, #9b59b6 35%, transparent); transition:all 0.15s; }' +
             '.ec-spoiler-check:hover { border-color:color-mix(in srgb, #9b59b6 55%, transparent); color:#9b59b6; background:color-mix(in srgb, #9b59b6 12%, transparent); }' +
@@ -330,9 +331,9 @@ define([], function () {
             '.ec-scroll { max-height:365px; overflow-y:auto; overflow-x:hidden; border-radius:8px; scrollbar-width:thin; scrollbar-color:color-mix(in srgb, currentColor 15%, transparent) transparent; }' +
             '.ec-scroll::-webkit-scrollbar { width:6px; } .ec-scroll::-webkit-scrollbar-track { background:transparent; } .ec-scroll::-webkit-scrollbar-thumb { background:color-mix(in srgb, currentColor 15%, transparent); border-radius:3px; }' +
             '.ec-list { display:flex; flex-direction:column; gap:6px; padding:0.3em 0; transition:opacity 0.15s; } .ec-list.ec-fading { opacity:0.4; }' +
-            '.ec-c { display:flex; gap:0.7em; padding:0.7em 0.8em; border-radius:8px; background:color-mix(in srgb, currentColor 5%, transparent); border:1px solid color-mix(in srgb, currentColor 6%, transparent); transition:all 0.2s; }' +
+            '.ec-c { display:flex; gap:0.7em; padding:0.7em 0.8em; border-radius:8px; background:color-mix(in srgb, currentColor 5%, transparent); border:1px solid color-mix(in srgb, currentColor 6%, transparent); transition:all 0.2s; backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px); }' +
             '.ec-c:hover { background:color-mix(in srgb, currentColor 8%, transparent); }' +
-            '.ec-c.reply { margin-left:2.8em; background:color-mix(in srgb, currentColor 3%, transparent); } .ec-c.reply:hover { background:color-mix(in srgb, currentColor 6%, transparent); }' +
+            '.ec-c.reply { margin-left:2.8em; background:color-mix(in srgb, currentColor 3%, transparent); backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); } .ec-c.reply:hover { background:color-mix(in srgb, currentColor 6%, transparent); }' +
             '.ec-c.ec-star-only { padding:0.45em 0.8em; }' +
             '.ec-c.ec-is-hidden { padding:0.4em 0.8em; background:transparent; }' +
             '.ec-c.ec-is-hidden .ec-c-body, .ec-c.ec-is-hidden .ec-avatar { display:none; }' +
@@ -394,14 +395,15 @@ define([], function () {
             '.ec-delete-confirm { display:none; font-size:0.72em; color:#e74c3c; margin-left:auto; align-items:center; gap:4px; } .ec-delete-confirm.ec-active { display:inline-flex; }' +
             '.ec-delete-confirm-btn { background:none; border:none; color:#e74c3c; cursor:pointer; font-family:inherit; font-size:1em; font-weight:600; padding:0; text-decoration:underline; }' +
             '.ec-show-more { background:none; border:none; color:var(--theme-accent-text-color, #00a4dc); cursor:pointer; font-size:0.75em; font-family:inherit; padding:0.4em 0 0.4em 3.6em; opacity:0.8; transition:opacity 0.15s; } .ec-show-more:hover { opacity:1; text-decoration:underline; }' +
-            '.ec-reply-inline { display:none; padding:0.3em 0 0.3em 3.6em; } .ec-reply-inline.open { display:flex; gap:0.4em; align-items:flex-start; }' +
-            '.ec-reply-inline .ec-textarea { min-height:36px; font-size:0.8em; padding:0.4em 0.6em; flex:1; border-radius:6px; }' +
-            '.ec-reply-inline .ec-btn { font-size:0.75em; padding:0.35em 0.8em; margin-top:0; white-space:nowrap; }' +
-            '.ec-pager { display:flex; align-items:center; justify-content:space-between; padding:0.5em 0.2em; margin-top:0.3em; }' +
+            '.ec-reply-inline { display:none; padding:0.3em 0.4em 0.3em 3.6em; } .ec-reply-inline.open { display:flex; gap:0.4em; align-items:flex-start; }' +            '.ec-reply-main { display:flex; flex-direction:column; gap:0.22em; flex:1; min-width:0; }' +
+            '.ec-reply-inline .ec-textarea { min-height:46px; height:46px; font-size:0.8em; line-height:1.35; padding:0.4em 0.6em; flex:none; border-radius:6px; overflow-y:hidden; resize:none; box-sizing:border-box; }' +            '.ec-reply-char-count { font-size:0.72em; opacity:0.3; text-align:right; padding-right:2px; line-height:1; }' +
+            '.ec-reply-char-count.ec-over { color:#e74c3c; opacity:1; }' +
+            '.ec-reply-actions { display:flex; flex-direction:column; gap:0.35em; flex-shrink:0; }' +
+            '.ec-reply-inline .ec-btn { font-size:0.75em; padding:0.35em 0.8em; margin-top:0; white-space:nowrap; }' +            '.ec-reply-cancel { background:none; border:1px solid color-mix(in srgb, currentColor 10%, transparent); color:inherit; opacity:0.45; cursor:pointer; border-radius:6px; font-size:0.72em; font-family:inherit; padding:0.32em 0.8em; transition:all 0.15s; }' +
+            '.ec-reply-cancel:hover { opacity:0.75; background:color-mix(in srgb, currentColor 5%, transparent); }' +            '.ec-pager { display:flex; align-items:center; justify-content:space-between; padding:0.5em 0.2em; margin-top:0.3em; }' +
             '.ec-pager-info { font-size:0.75em; opacity:0.3; }' +
             '.ec-pager-btns { display:flex; gap:0.4em; }' +
-            '.ec-pager-btn { background:color-mix(in srgb, currentColor 6%, transparent); border:1px solid color-mix(in srgb, currentColor 8%, transparent); border-radius:6px; opacity:0.55; cursor:pointer; font-size:0.75em; font-family:inherit; padding:0.35em 0.9em; transition:all 0.15s; color:inherit; }' +
-            '.ec-pager-btn:hover:not(:disabled) { background:color-mix(in srgb, currentColor 10%, transparent); opacity:0.8; } .ec-pager-btn:disabled { opacity:0.15; cursor:default; }' +
+            '.ec-pager-btn { background:color-mix(in srgb, currentColor 6%, transparent); border:1px solid color-mix(in srgb, currentColor 8%, transparent); border-radius:6px; opacity:0.55; cursor:pointer; font-size:0.75em; font-family:inherit; padding:0.35em 0.9em; transition:all 0.15s; color:inherit; backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px); }' +            '.ec-pager-btn:hover:not(:disabled) { background:color-mix(in srgb, currentColor 10%, transparent); opacity:0.8; } .ec-pager-btn:disabled { opacity:0.15; cursor:default; }' +
             '.ec-empty { opacity:0.3; padding:1em 0; font-size:0.85em; }' +
             '.ec-error { color:#ff4444; padding:0.5em; background:rgba(255,0,0,0.08); border-radius:6px; margin-bottom:0.5em; display:none; font-size:0.8em; }' +
             '.ec-loading { text-align:center; padding:0.8em 0; opacity:0.2; font-size:0.8em; }' +
@@ -413,8 +415,10 @@ define([], function () {
             '<div class="ec-name-warning" id="ec-name-warning">' + WARNING_SVG + ' Your display name has been flagged as inappropriate. You cannot post comments or replies until you update your name in the plugin settings.</div>' +
             '<button class="ec-form-toggle" id="ec-form-toggle">\u270E  Write a comment...</button>' +
             '<div class="ec-form" id="ec-form">' +
-            '<button class="ec-form-close" id="ec-form-close">\u2715</button>' +
+            '<div class="ec-form-head">' +
             '<div class="ec-stars" id="ec-stars"><span data-value="1">\u2605</span><span data-value="2">\u2605</span><span data-value="3">\u2605</span><span data-value="4">\u2605</span><span data-value="5">\u2605</span><span data-value="6">\u2605</span><span data-value="7">\u2605</span><span data-value="8">\u2605</span><span data-value="9">\u2605</span><span data-value="10">\u2605</span></div>' +
+            '<button class="ec-form-close" id="ec-form-close" title="Close">\u2715</button>' +
+            '</div>' +            
             '<textarea class="ec-textarea" id="ec-body" placeholder="Share your thoughts..." maxlength="' + MAX_CHARS + '"></textarea>' +
             '<div class="ec-form-footer"><button class="ec-btn" id="ec-submit">Post</button><label class="ec-spoiler-check" title="Click this tag if your comment reveals plot points, twists, or endings"><input type="checkbox" id="ec-spoiler-cb"> Spoiler</label><span class="ec-char-count" id="ec-char-count">0 / ' + MAX_CHARS + '</span></div></div>' +
             '<div class="ec-scroll" id="ec-scroll"><div class="ec-list" id="ec-list"><div class="ec-loading">Loading...</div></div></div>' +
@@ -435,6 +439,7 @@ define([], function () {
         section.querySelector('#ec-form-close').addEventListener('click', function () {
             form.classList.remove('open');
             toggle.style.display = 'block';
+            section.querySelector('#ec-body').value = '';
         });
     }
 
@@ -559,10 +564,12 @@ define([], function () {
 
             // Render pending comments at the top (only on first page)
             if (currentPage === 0 && pendingComments.length > 0) {
-                pendingComments.forEach(function (c) {
-                    var el = createPendingCommentEl(c);
-                    list.appendChild(el);
-                });
+                pendingComments
+                    .filter(function (c) { return !c.ParentCommentId; })
+                    .forEach(function (c) {
+                        var el = createPendingCommentEl(c, false);
+                        list.appendChild(el);
+                    });
             }
 
             if (data.comments.length === 0 && pendingComments.length === 0) {
@@ -577,9 +584,9 @@ define([], function () {
         }).catch(function (err) { isLoading = false; list.classList.remove('ec-fading'); showError(section, 'Failed to load: ' + err.message); });
     }
 
-    function createPendingCommentEl(c) {
+    function createPendingCommentEl(c, isReply) {
         var div = document.createElement('div');
-        div.className = 'ec-c';
+        div.className = 'ec-c' + (isReply ? ' reply' : '');
         div.dataset.commentId = c.CommentId;
 
         var name = c.AuthorDisplayName || 'Anonymous';
@@ -590,12 +597,12 @@ define([], function () {
                 renderAvatar(name, c.AvatarBlob, 'opacity:0.5;') +
                 '<div class="ec-c-body">' +
                 '<div class="ec-c-top"><span class="ec-c-author" style="opacity:0.5;">' + esc(name) + '</span>' +
+                (c.StarRating ? '<span class="ec-c-rating">\u2605 ' + c.StarRating + '/10</span>' : '') +
                 '<span class="ec-c-date">' + formatDate(c.CreatedAt) + '</span></div>' +
                 '<div class="ec-denied-body">' + WARNING_SVG + ' Comment denied</div>' +
                 '<div class="ec-denied-reason">' + esc(c.DenialReason || 'Did not meet community guidelines') + '</div>' +
                 '</div>';
         } else {
-            // awaiting
             div.classList.add('ec-awaiting');
             div.innerHTML =
                 renderAvatar(name, c.AvatarBlob) +
@@ -610,7 +617,6 @@ define([], function () {
 
         return div;
     }
-
     function buildDecimalStars(avg, outOf) {
         var html = '';
         for (var i = 1; i <= outOf; i++) {
@@ -647,37 +653,152 @@ define([], function () {
         el.style.display = 'flex';
     }
 
+    function autoGrowTextarea(textarea) {
+        if (!textarea) return;
+
+        var minHeight = 46;
+
+        if (!textarea.value) {
+            textarea.style.height = minHeight + 'px';
+            return;
+        }
+
+        textarea.style.height = 'auto';
+        var nextHeight = Math.max(minHeight, textarea.scrollHeight);
+
+        if (Math.abs(nextHeight - textarea.offsetHeight) > 1) {
+            textarea.style.height = nextHeight + 'px';
+        }
+    }
+
     function appendComment(section, list, comment) {
         var el = createCommentEl(comment, false);
-        list.appendChild(el); wireActions(section, list, el, comment, false);
+        list.appendChild(el);
+        wireActions(section, list, el, comment, false);
 
         var isExplicitCollapsed = censorExplicit && comment.Explicit === 1;
 
         if (!isExplicitCollapsed) {
+            var pendingReplies = pendingComments.filter(function (c) {
+                return c.ParentCommentId === comment.CommentId;
+            });
+
             (comment.Replies || []).forEach(function (r) {
-                var re = createCommentEl(r, true); list.appendChild(re); wireActions(section, list, re, r, true);
+                var re = createCommentEl(r, true);
+                list.appendChild(re);
+                wireActions(section, list, re, r, true);
+            });
+
+            pendingReplies.forEach(function (r) {
+                var re = createPendingCommentEl(r, true);
+                list.appendChild(re);
             });
 
             if (userModerationStatus !== 'denied') {
                 var replyForm = document.createElement('div');
-                replyForm.className = 'ec-reply-inline'; replyForm.id = 'ec-rf-' + comment.CommentId;
-                replyForm.innerHTML = '<textarea class="ec-textarea" id="ec-rt-' + comment.CommentId + '" placeholder="Reply..."></textarea><button class="ec-btn ec-reply-post" data-id="' + comment.CommentId + '">Reply</button>';
+                replyForm.className = 'ec-reply-inline';
+                replyForm.id = 'ec-rf-' + comment.CommentId;
+                replyForm.innerHTML =
+                    '<div class="ec-reply-main">' +
+                    '<textarea class="ec-textarea" id="ec-rt-' + comment.CommentId + '" placeholder="Reply..." maxlength="' + MAX_CHARS + '"></textarea>' +
+                    '<div class="ec-reply-char-count" id="ec-rc-' + comment.CommentId + '">0 / ' + MAX_CHARS + '</div>' +
+                    '</div>' +
+                    '<div class="ec-reply-actions">' +
+                    '<button class="ec-btn ec-reply-post" data-id="' + comment.CommentId + '">Reply</button>' +
+                    '<button class="ec-reply-cancel" data-id="' + comment.CommentId + '" type="button">Cancel</button>' +
+                    '</div>';
                 list.appendChild(replyForm);
 
-                replyForm.querySelector('.ec-reply-post').addEventListener('click', function () {
-                    var pid = this.dataset.id, ta = section.querySelector('#ec-rt-' + pid), body = ta.value.trim();
-                    if (!body || !userUuid) return;
-                    cfFetch(apiEndpoint + '/comments', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ MediaKey: currentMediaKey, MediaTitle: currentItemName, UserUuid: userUuid, Body: body, StarRating: null, ParentCommentId: pid })
-                    }).then(function () { ta.value = ''; replyForm.classList.remove('open'); loadComments(section, true); startModerationPoll(section); });
-                });
+                var replyTextarea = replyForm.querySelector('#ec-rt-' + comment.CommentId);
+                var replyCounter = replyForm.querySelector('#ec-rc-' + comment.CommentId);
+                var replyPostBtn = replyForm.querySelector('.ec-reply-post');
+                var cancelBtn = replyForm.querySelector('.ec-reply-cancel');
+
+                function resetReplyForm() {
+                    if (replyTextarea) {
+                        replyTextarea.value = '';
+                        replyTextarea.style.height = '46px';
+                    }
+                    if (replyCounter) {
+                        replyCounter.textContent = '0 / ' + MAX_CHARS;
+                        replyCounter.classList.remove('ec-over');
+                    }
+                    replyForm.classList.remove('open');
+                }
+
+                if (replyTextarea) {
+                    replyTextarea.maxLength = MAX_CHARS;
+                    autoGrowTextarea(replyTextarea);
+
+                    replyTextarea.addEventListener('input', function () {
+                        var len = this.value.length;
+
+                        if (len > MAX_CHARS) {
+                            this.value = this.value.substring(0, MAX_CHARS);
+                            len = this.value.length;
+                        }
+
+                        if (replyCounter) {
+                            replyCounter.textContent = len + ' / ' + MAX_CHARS;
+                            replyCounter.classList.toggle('ec-over', len >= MAX_CHARS);
+                        }
+
+                        autoGrowTextarea(this);
+                    });
+                }
+
+                if (replyPostBtn) {
+                    replyPostBtn.addEventListener('click', function () {
+                        var pid = this.dataset.id;
+                        var ta = section.querySelector('#ec-rt-' + pid);
+                        var body = ta ? ta.value.trim() : '';
+
+                        if (!body || !userUuid) return;
+
+                        if (body.length > MAX_CHARS) {
+                            showError(section, 'Reply exceeds ' + MAX_CHARS + ' character limit.');
+                            return;
+                        }
+
+                        cfFetch(apiEndpoint + '/comments', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                MediaKey: currentMediaKey,
+                                MediaTitle: currentItemName,
+                                UserUuid: userUuid,
+                                Body: body,
+                                StarRating: null,
+                                ParentCommentId: pid
+                            })
+                        }).then(function () {
+                            resetReplyForm();
+                            loadComments(section, true);
+                            startModerationPoll(section);
+                        }).catch(function (err) {
+                            showError(section, 'Failed to post reply: ' + err.message);
+                        });
+                    });
+                }
+
+                if (cancelBtn) {
+                    cancelBtn.addEventListener('click', function () {
+                        resetReplyForm();
+                    });
+                }
             }
 
-            var remaining = (comment.ReplyCount || 0) - (comment.Replies || []).length;
+            var approvedReplyCount = (comment.Replies || []).length;
+            var pendingReplyCount = pendingReplies.length;
+            var remaining = (comment.ReplyCount || 0) - approvedReplyCount - pendingReplyCount;
+
             if (remaining > 0) {
-                var moreBtn = document.createElement('button'); moreBtn.className = 'ec-show-more';
+                var moreBtn = document.createElement('button');
+                moreBtn.className = 'ec-show-more';
                 moreBtn.textContent = 'Show ' + remaining + ' more ' + (remaining === 1 ? 'reply' : 'replies');
-                moreBtn.addEventListener('click', function () { loadRemainingReplies(section, list, comment.CommentId, moreBtn, (comment.Replies || []).length); });
+                moreBtn.addEventListener('click', function () {
+                    loadRemainingReplies(section, list, comment.CommentId, moreBtn, approvedReplyCount);
+                });
                 list.appendChild(moreBtn);
             }
         }
@@ -783,7 +904,16 @@ define([], function () {
             var toggle = el.querySelector('.ec-reply-toggle');
             if (toggle) toggle.addEventListener('click', function () {
                 var form = section.querySelector('#ec-rf-' + this.dataset.id);
-                if (form) { form.classList.toggle('open'); if (form.classList.contains('open')) form.querySelector('textarea').focus(); }
+                if (form) {
+                    form.classList.toggle('open');
+                    if (form.classList.contains('open')) {
+                        var ta = form.querySelector('textarea');
+                        if (ta) {
+                            autoGrowTextarea(ta);
+                            ta.focus();
+                        }
+                    }
+                }
             });
         }
 
