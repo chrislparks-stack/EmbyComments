@@ -159,6 +159,9 @@ coverage*.info
 *.coverage
 *.coveragexml
 
+# Cloudflare worker configuration
+emby-comments-worker/
+
 # NCrunch
 _NCrunch_*
 .*crunch*.local.xml
