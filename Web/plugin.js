@@ -1,6 +1,7 @@
 define([], function () {
     var apiEndpoint = null;
     var displayName = null;
+    var userAvatarBlob = null;
     var serverGuid = null;
     var userUuid = null;
     var selectedRating = 0;
@@ -18,7 +19,11 @@ define([], function () {
     var hiddenSet = {};
     var userModerationStatus = 'approved';
     var pendingComments = [];
+    var hasPendingActivity = false;
     var censorExplicit = false;
+    var currentSort = 'newest';
+    var languageFilter = [];
+    var LANGUAGES = ['English', 'Español', 'Français', 'Deutsch', 'Português', 'Italiano', 'Nederlands', 'Русский', '日本語', '한국어', '中文', 'العربية', 'हिन्दी', 'Türkçe', 'Polski', 'Svenska'];
     var moderationPollTimer = null;
     var moderationPollCount = 0;
     var sessionToken = null;
@@ -31,7 +36,7 @@ define([], function () {
     var TRASH_SVG = '<svg viewBox="0 0 24 24" width="12" height="12" style="vertical-align:-1px;"><path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>';
     var WARNING_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" style="vertical-align:-2px;"><path fill="currentColor" d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>';
     var SHIELD_SVG = '<svg viewBox="0 0 24 24" width="12" height="12" style="vertical-align:-1px;"><path fill="currentColor" d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-1 17.93C7.05 17.74 5 14.49 5 11V6.3l7-3.11 7 3.11V11c0 3.49-2.05 6.74-6 7.93V18h-1v.93zM10 14.17l-2.59-2.58L6 13l4 4 8-8-1.41-1.42L10 14.17z"/></svg>';
-    var GEAR_SVG = '<svg viewBox="0 0 24 24" width="16" height="16" style="vertical-align:-2px;"><path fill="currentColor" d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.49.49 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 00-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6A3.6 3.6 0 1115.6 12 3.611 3.611 0 0112 15.6z"/></svg>';
+
 
     var avatarColors = [
         '#e74c3c', '#e67e22', '#f1c40f', '#2ecc71', '#1abc9c',
@@ -98,6 +103,7 @@ define([], function () {
                 }
                 userUuid = data.UserUuid;
                 sessionToken = data.token;
+                userAvatarBlob = data.AvatarBlob || null;
                 initRetries = 0;
                 startObserver();
             }).catch(function () { setTimeout(init, 3000); });
@@ -116,6 +122,7 @@ define([], function () {
         }).then(function (data) {
             if (data.token) sessionToken = data.token;
             if (data.UserUuid) userUuid = data.UserUuid;
+            if (data.AvatarBlob) userAvatarBlob = data.AvatarBlob;
         });
     }
 
@@ -160,6 +167,7 @@ define([], function () {
         reactionsMap = {};
         hiddenSet = {};
         pendingComments = [];
+        hasPendingActivity = false;
         userModerationStatus = 'approved';
         if (moderationPollTimer) { clearInterval(moderationPollTimer); moderationPollTimer = null; }
         moderationPollCount = 0;
@@ -216,10 +224,11 @@ define([], function () {
             setupSubmit(section, item);
             setupFormToggle(section);
             setupPagination(section);
-            setupGear(section);
+            setupToolbar(section);
 
             Promise.all([fetchMyState(), fetchMyPending()]).then(function () {
                 updateFormVisibility(section);
+                applyToolbarState(section);
                 loadComments(section);
             });
         });
@@ -236,6 +245,8 @@ define([], function () {
                 (data.hidden || []).forEach(function (id) { hiddenSet[id] = true; });
                 userModerationStatus = data.userModerationStatus || 'approved';
                 censorExplicit = data.censorExplicit || false;
+                currentSort = data.sortPreference || 'newest';
+                languageFilter = data.languageFilter || [];
             })
             .catch(function () { reactionsMap = {}; hiddenSet = {}; userModerationStatus = 'approved'; censorExplicit = false; });
     }
@@ -254,21 +265,42 @@ define([], function () {
 
         moderationPollTimer = setInterval(function () {
             moderationPollCount++;
-            if (moderationPollCount >= 10 || !document.getElementById('embycomments-section')) {
+            if (moderationPollCount >= 6 || !document.getElementById('embycomments-section')) {
                 clearInterval(moderationPollTimer);
                 moderationPollTimer = null;
                 return;
             }
 
+            var awaitingSnapshot = {};
+            pendingComments
+                .filter(function (c) { return c.ModerationStatus === 'awaiting'; })
+                .forEach(function (c) { awaitingSnapshot[c.CommentId] = { AuthorDisplayName: c.AuthorDisplayName, Body: c.Body, CreatedAt: c.CreatedAt, StarRating: c.StarRating, AvatarBlob: c.AvatarBlob, ParentCommentId: c.ParentCommentId }; });
+            var awaitingIds = Object.keys(awaitingSnapshot);
+
             fetchMyPending().then(function () {
+                var list = section.querySelector('#ec-list');
+                if (!list) return;
+
+                awaitingIds.forEach(function (id) {
+                    var el = list.querySelector('.ec-c[data-comment-id="' + id + '"]');
+                    if (!el) return;
+
+                    var pending = pendingComments.find(function (c) { return c.CommentId === id; });
+
+                    if (!pending) {
+                        transitionToApproved(el, awaitingSnapshot[id], section, list);
+                    } else if (pending.ModerationStatus === 'denied') {
+                        transitionToDenied(el, pending);
+                    }
+                });
+
                 var stillAwaiting = pendingComments.some(function (c) { return c.ModerationStatus === 'awaiting'; });
                 if (!stillAwaiting) {
                     clearInterval(moderationPollTimer);
                     moderationPollTimer = null;
-                    loadComments(section, true);
                 }
             });
-        }, 5000);
+        }, 8000);
     }
 
     function updateFormVisibility(section) {
@@ -280,8 +312,6 @@ define([], function () {
         } else {
             nameWarning.style.display = 'none';
         }
-        var censorToggle = section.querySelector('#ec-censor-toggle');
-        if (censorToggle) censorToggle.checked = censorExplicit;
     }
 
     function isSupported(item) { return item && (item.Type === 'Movie' || item.Type === 'Series' || item.Type === 'Episode'); }
@@ -297,7 +327,7 @@ define([], function () {
 
     function buildSectionHtml() {
         return '<style>' +
-            '#embycomments-section { font-family:inherit; color:inherit; }' +
+            '#embycomments-section { font-family:inherit; color:inherit; position:relative; z-index:10; }' +
             '.ec-content { padding-bottom:1.5em; }' +
             '.ec-summary { display:flex; align-items:center; gap:1em; padding:0.4em 0; margin-bottom:0.4em; flex-wrap:wrap; }' +
             '.ec-avg { display:flex; align-items:baseline; gap:0.25em; }' +
@@ -333,6 +363,7 @@ define([], function () {
             '.ec-list { display:flex; flex-direction:column; gap:6px; padding:0.3em 0; transition:opacity 0.15s; } .ec-list.ec-fading { opacity:0.4; }' +
             '.ec-c { display:flex; gap:0.7em; padding:0.7em 0.8em; border-radius:8px; background:color-mix(in srgb, currentColor 5%, transparent); border:1px solid color-mix(in srgb, currentColor 6%, transparent); transition:all 0.2s; backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px); }' +
             '.ec-c:hover { background:color-mix(in srgb, currentColor 8%, transparent); }' +
+            '.ec-removing { opacity:0 !important; pointer-events:none; }' +
             '.ec-c.reply { margin-left:2.8em; background:color-mix(in srgb, currentColor 3%, transparent); backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); } .ec-c.reply:hover { background:color-mix(in srgb, currentColor 6%, transparent); }' +
             '.ec-c.ec-star-only { padding:0.45em 0.8em; }' +
             '.ec-c.ec-is-hidden { padding:0.4em 0.8em; background:transparent; }' +
@@ -344,6 +375,7 @@ define([], function () {
             '.ec-c.ec-awaiting .ec-c-text { opacity:0.5; }' +
             '.ec-mod-badge { display:inline-flex; align-items:center; gap:3px; font-size:0.68em; padding:1px 7px; border-radius:4px; white-space:nowrap; font-weight:500; }' +
             '.ec-mod-badge.ec-awaiting-badge { background:rgba(52,152,219,0.12); color:#5dade2; }' +
+            '.ec-mod-badge.ec-approved-badge { background:rgba(46,204,113,0.12); color:#2ecc71; }' +
             '.ec-mod-badge.ec-spoiler-badge { background:rgba(155,89,182,0.12); color:#9b59b6; }' +
             '.ec-mod-badge.ec-explicit-badge { background:rgba(243,156,18,0.12); color:#f39c12; }' +
             '.ec-c.ec-explicit-collapsed { background:rgba(243,156,18,0.04); border-color:rgba(243,156,18,0.1); }' +
@@ -352,13 +384,6 @@ define([], function () {
             '.ec-explicit-wrap .ec-c-text { filter:blur(5px); user-select:none; }' +
             '.ec-explicit-overlay { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none; }' +
             '.ec-explicit-overlay span { font-size:0.8em; opacity:0.7; background:rgba(243,156,18,0.2); padding:4px 12px; border-radius:4px; }' +
-            '.ec-gear-btn { background:none; border:none; color:inherit; opacity:0.15; cursor:pointer; padding:2px; border-radius:4px; transition:all 0.15s; margin-left:6px; vertical-align:middle; line-height:1; }' +
-            '.ec-gear-btn:hover { opacity:0.4; }' +
-            '.ec-gear-wrap { position:relative; display:inline-block; }' +
-            '.ec-gear-menu { display:none; position:absolute; top:calc(100% + 4px); left:0; background:color-mix(in srgb, currentColor 8%, transparent); backdrop-filter:blur(16px); -webkit-backdrop-filter:blur(16px); border:1px solid color-mix(in srgb, currentColor 10%, transparent); border-radius:8px; padding:4px 0; z-index:100; box-shadow:0 4px 12px rgba(0,0,0,0.15); }' +
-            '.ec-gear-menu.open { display:block; }' +
-            '.ec-gear-item { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:6px 12px; font-size:12px; font-weight:400; color:inherit; opacity:0.5; cursor:pointer; transition:background 0.1s; white-space:nowrap; }' +
-            '.ec-gear-item:hover { background:color-mix(in srgb, currentColor 5%, transparent); opacity:0.7; }' +
             '.ec-toggle { position:relative; width:28px; height:16px; flex-shrink:0; }' +
             '.ec-toggle input { opacity:0; width:0; height:0; }' +
             '.ec-toggle-slider { position:absolute; inset:0; background:color-mix(in srgb, currentColor 15%, transparent); border-radius:8px; transition:background 0.2s; cursor:pointer; }' +
@@ -407,8 +432,24 @@ define([], function () {
             '.ec-empty { opacity:0.3; padding:1em 0; font-size:0.85em; }' +
             '.ec-error { color:#ff4444; padding:0.5em; background:rgba(255,0,0,0.08); border-radius:6px; margin-bottom:0.5em; display:none; font-size:0.8em; }' +
             '.ec-loading { text-align:center; padding:0.8em 0; opacity:0.2; font-size:0.8em; }' +
+            '.ec-toolbar { display:flex; align-items:center; gap:0.8em; padding:0.5em 0; margin-bottom:0.4em; border-bottom:1px solid color-mix(in srgb, currentColor 6%, transparent); flex-wrap:wrap; }' +
+            '.ec-toolbar-group { display:flex; align-items:center; gap:0.35em; }' +
+            '.ec-toolbar-label { font-size:0.72em; opacity:0.35; white-space:nowrap; }' +
+            '.ec-toolbar-btn { background:color-mix(in srgb, currentColor 5%, transparent); border:1px solid color-mix(in srgb, currentColor 8%, transparent); border-radius:6px; color:inherit; font-size:0.72em; font-family:inherit; padding:0.3em 0.5em; cursor:pointer; opacity:0.7; transition:all 0.15s; line-height:1.4; text-align:left; white-space:nowrap; }' +
+            '.ec-toolbar-btn:hover { opacity:0.9; background:color-mix(in srgb, currentColor 8%, transparent); }' +
+            '.ec-drop-wrap { position:relative; }' +
+            '.ec-dropdown { display:none; position:absolute; top:calc(100% + 4px); left:0; min-width:100%; background:color-mix(in srgb, currentColor 8%, transparent); backdrop-filter:blur(16px); -webkit-backdrop-filter:blur(16px); border:1px solid color-mix(in srgb, currentColor 10%, transparent); border-radius:8px; padding:4px 0; z-index:1000; box-shadow:0 4px 12px rgba(0,0,0,0.15); max-height:240px; overflow-y:auto; overflow-x:hidden; }' +
+            '.ec-dropdown.open { display:block; }' +
+            '.ec-drop-item { display:flex; align-items:center; gap:6px; padding:4px 10px; font-size:0.72em; opacity:0.55; cursor:pointer; white-space:nowrap; transition:background 0.1s; }' +
+            '.ec-drop-item:hover { background:color-mix(in srgb, currentColor 5%, transparent); opacity:0.75; }' +
+            '.ec-drop-item.selected { opacity:0.9; }' +
+            '.ec-drop-item input[type="checkbox"] { margin:0; accent-color:var(--theme-accent-text-color, #00a4dc); }' +
+            '.ec-censor-btn { background:color-mix(in srgb, currentColor 5%, transparent); border:1px solid color-mix(in srgb, currentColor 8%, transparent); border-radius:6px; color:inherit; font-size:0.72em; font-family:inherit; padding:0.3em 0.5em; cursor:pointer; opacity:0.7; transition:all 0.15s; line-height:1.4; white-space:nowrap; margin-left:auto; display:flex; align-items:center; gap:5px; }' +
+            '.ec-censor-btn:hover { opacity:0.9; background:color-mix(in srgb, currentColor 8%, transparent); }' +
+            '.ec-censor-btn.active { background:rgba(243,156,18,0.15); border-color:rgba(243,156,18,0.3); opacity:0.9; }' +
+            '.ec-censor-btn.active:hover { background:rgba(243,156,18,0.25); }' +
             '</style>' +
-            '<h2 class="sectionTitle sectionTitle-cards padded-left padded-left-page padded-right">Community Comments<span class="ec-gear-wrap"><button class="ec-gear-btn" id="ec-gear" title="Settings">' + GEAR_SVG + '</button><div class="ec-gear-menu" id="ec-gear-menu"><label class="ec-gear-item">Censor explicit comments<span class="ec-toggle"><input type="checkbox" id="ec-censor-toggle"><span class="ec-toggle-slider"></span></span></label></div></span></h2>' +
+            '<h2 class="sectionTitle sectionTitle-cards padded-left padded-left-page padded-right">Community Comments</h2>' +
             '<div class="ec-content sectionTitle-cards padded-left padded-left-page padded-right">' +
             '<div class="ec-summary" id="ec-summary" style="display:none;"></div>' +
             '<div class="ec-error" id="ec-error"></div>' +
@@ -421,6 +462,11 @@ define([], function () {
             '</div>' +            
             '<textarea class="ec-textarea" id="ec-body" placeholder="Share your thoughts..." maxlength="' + MAX_CHARS + '"></textarea>' +
             '<div class="ec-form-footer"><button class="ec-btn" id="ec-submit">Post</button><label class="ec-spoiler-check" title="Click this tag if your comment reveals plot points, twists, or endings"><input type="checkbox" id="ec-spoiler-cb"> Spoiler</label><span class="ec-char-count" id="ec-char-count">0 / ' + MAX_CHARS + '</span></div></div>' +
+            '<div class="ec-toolbar" id="ec-toolbar">' +
+            '<div class="ec-toolbar-group"><label class="ec-toolbar-label">Sort</label><div class="ec-drop-wrap"><button class="ec-toolbar-btn" id="ec-sort-btn">Newest \u25be</button><div class="ec-dropdown" id="ec-sort-dropdown"></div></div></div>' +
+            '<div class="ec-toolbar-group"><label class="ec-toolbar-label">Language</label><div class="ec-drop-wrap"><button class="ec-toolbar-btn" id="ec-lang-btn">All Languages \u25be</button><div class="ec-dropdown" id="ec-lang-dropdown"></div></div></div>' +
+            '<button class="ec-censor-btn" id="ec-censor-toggle" type="button">' + WARNING_SVG + ' Censor explicit</button>' +
+            '</div>' +
             '<div class="ec-scroll" id="ec-scroll"><div class="ec-list" id="ec-list"><div class="ec-loading">Loading...</div></div></div>' +
             '<div class="ec-pager" id="ec-pager" style="display:none;"><span class="ec-pager-info" id="ec-pager-info"></span>' +
             '<div class="ec-pager-btns"><button class="ec-pager-btn" id="ec-prev" disabled>\u2039 Prev</button><button class="ec-pager-btn" id="ec-next" disabled>Next \u203A</button></div></div></div>';
@@ -493,6 +539,7 @@ define([], function () {
                 section.querySelector('#ec-form').classList.remove('open');
                 section.querySelector('#ec-form-toggle').style.display = 'block';
                 currentPage = 0;
+                hasPendingActivity = true;
                 loadComments(section, true);
                 if (!starOnly) startModerationPoll(section);
             }).catch(function (err) { showError(section, 'Failed to post: ' + err.message); });
@@ -503,33 +550,148 @@ define([], function () {
         section.querySelector('#ec-prev').addEventListener('click', function () { if (currentPage > 0) { currentPage--; loadComments(section); } });
         section.querySelector('#ec-next').addEventListener('click', function () { if (currentPage < Math.ceil(commentTotal / PAGE_SIZE) - 1) { currentPage++; loadComments(section); } });
     }
+    function saveUserSettings(settings) {
+        cfFetch(apiEndpoint + '/user-settings', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(Object.assign({ UserUuid: userUuid }, settings))
+        }).catch(function () {});
+    }
 
-    function setupGear(section) {
-        var gearBtn = section.querySelector('#ec-gear');
-        var menu = section.querySelector('#ec-gear-menu');
+    function updateLangBtnLabel(btn) {
+        if (languageFilter.length === 0) {
+            btn.textContent = 'All Languages \u25be';
+        } else if (languageFilter.length === 1) {
+            btn.textContent = languageFilter[0] + ' \u25be';
+        } else {
+            btn.textContent = languageFilter.length + ' selected \u25be';
+        }
+    }
+
+    var SORT_OPTIONS = [
+        { value: 'newest', label: 'Newest' },
+        { value: 'oldest', label: 'Oldest' },
+        { value: 'best', label: 'Best Rating' },
+        { value: 'worst', label: 'Worst Rating' },
+        { value: 'popular', label: 'Most Popular' },
+        { value: 'most_replied', label: 'Most Replied' }
+    ];
+
+    function getSortLabel(val) {
+        for (var i = 0; i < SORT_OPTIONS.length; i++) {
+            if (SORT_OPTIONS[i].value === val) return SORT_OPTIONS[i].label;
+        }
+        return 'Newest';
+    }
+
+    function setupToolbar(section) {
+        var sortBtn = section.querySelector('#ec-sort-btn');
+        var sortDropdown = section.querySelector('#ec-sort-dropdown');
+        var langBtn = section.querySelector('#ec-lang-btn');
+        var langDropdown = section.querySelector('#ec-lang-dropdown');
         var censorToggle = section.querySelector('#ec-censor-toggle');
-        if (!gearBtn || !menu || !censorToggle) return;
 
-        gearBtn.addEventListener('click', function (e) {
-            e.stopPropagation();
-            menu.classList.toggle('open');
+        // Build sort dropdown items
+        SORT_OPTIONS.forEach(function (opt) {
+            var item = document.createElement('div');
+            item.className = 'ec-drop-item' + (opt.value === currentSort ? ' selected' : '');
+            item.dataset.value = opt.value;
+            item.textContent = opt.label;
+            item.addEventListener('click', function () {
+                currentSort = opt.value;
+                sortBtn.textContent = opt.label + ' \u25be';
+                sortDropdown.classList.remove('open');
+                var items = sortDropdown.querySelectorAll('.ec-drop-item');
+                for (var i = 0; i < items.length; i++) {
+                    items[i].classList.toggle('selected', items[i].dataset.value === currentSort);
+                }
+                currentPage = 0;
+                saveUserSettings({ SortPreference: currentSort });
+                loadComments(section, true);
+            });
+            sortDropdown.appendChild(item);
         });
 
-        // Close menu when clicking outside
+        // Build language dropdown checkboxes
+        LANGUAGES.forEach(function (lang) {
+            var item = document.createElement('label');
+            item.className = 'ec-drop-item';
+            var cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.value = lang;
+            cb.addEventListener('change', function () {
+                if (this.checked) {
+                    if (languageFilter.indexOf(lang) === -1) languageFilter.push(lang);
+                } else {
+                    var idx = languageFilter.indexOf(lang);
+                    if (idx !== -1) languageFilter.splice(idx, 1);
+                }
+                updateLangBtnLabel(langBtn);
+                currentPage = 0;
+                saveUserSettings({ LanguageFilter: languageFilter });
+                loadComments(section, true);
+            });
+            item.appendChild(cb);
+            item.appendChild(document.createTextNode(lang));
+            langDropdown.appendChild(item);
+        });
+
+        // Toggle sort dropdown
+        sortBtn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            langDropdown.classList.remove('open');
+            sortDropdown.classList.toggle('open');
+        });
+
+        // Toggle language dropdown
+        langBtn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            sortDropdown.classList.remove('open');
+            langDropdown.classList.toggle('open');
+        });
+
+        // Close all dropdowns when clicking outside
         document.addEventListener('click', function (e) {
-            if (!menu.contains(e.target) && e.target !== gearBtn) {
-                menu.classList.remove('open');
+            if (!sortDropdown.contains(e.target) && e.target !== sortBtn) {
+                sortDropdown.classList.remove('open');
+            }
+            if (!langDropdown.contains(e.target) && e.target !== langBtn) {
+                langDropdown.classList.remove('open');
             }
         });
 
-        censorToggle.addEventListener('change', function () {
-            censorExplicit = this.checked;
-            cfFetch(apiEndpoint + '/user-settings', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ UserUuid: userUuid, CensorExplicit: censorExplicit })
-            }).catch(function () {});
+        // Censor explicit toggle (button)
+        censorToggle.addEventListener('click', function () {
+            censorExplicit = !censorExplicit;
+            this.classList.toggle('active', censorExplicit);
+            saveUserSettings({ CensorExplicit: censorExplicit });
             loadComments(section, true);
         });
+    }
+
+    function applyToolbarState(section) {
+        var sortBtn = section.querySelector('#ec-sort-btn');
+        var sortDropdown = section.querySelector('#ec-sort-dropdown');
+        var langBtn = section.querySelector('#ec-lang-btn');
+        var langDropdown = section.querySelector('#ec-lang-dropdown');
+        var censorToggle = section.querySelector('#ec-censor-toggle');
+
+        if (sortBtn) sortBtn.textContent = getSortLabel(currentSort) + ' \u25be';
+        if (sortDropdown) {
+            var items = sortDropdown.querySelectorAll('.ec-drop-item');
+            for (var i = 0; i < items.length; i++) {
+                items[i].classList.toggle('selected', items[i].dataset.value === currentSort);
+            }
+        }
+        if (censorToggle) censorToggle.classList.toggle('active', censorExplicit);
+
+        // Sync language checkboxes
+        if (langDropdown) {
+            var checkboxes = langDropdown.querySelectorAll('input[type="checkbox"]');
+            checkboxes.forEach(function (cb) {
+                cb.checked = languageFilter.indexOf(cb.value) !== -1;
+            });
+        }
+        if (langBtn) updateLangBtnLabel(langBtn);
     }
 
     function updatePager(section) {
@@ -549,11 +711,12 @@ define([], function () {
         var hasExisting = list.children.length > 0 && !list.querySelector('.ec-loading');
         if (hasExisting) list.classList.add('ec-fading'); else list.innerHTML = '<div class="ec-loading">Loading...</div>';
 
-        var url = apiEndpoint + '/comments?mediaKey=' + encodeURIComponent(currentMediaKey) + '&limit=' + PAGE_SIZE + '&offset=' + (currentPage * PAGE_SIZE);
+        var url = apiEndpoint + '/comments?mediaKey=' + encodeURIComponent(currentMediaKey) + '&limit=' + PAGE_SIZE + '&offset=' + (currentPage * PAGE_SIZE) + '&sort=' + currentSort;
+        if (languageFilter.length > 0) url += '&language=' + encodeURIComponent(languageFilter.join(','));
         if (bustCache) url += '&_t=' + Date.now();
 
-        // Refetch pending on every load
-        var pendingPromise = bustCache ? fetchMyPending() : Promise.resolve();
+        // Only refetch pending if user has posted something this session
+        var pendingPromise = hasPendingActivity ? fetchMyPending() : Promise.resolve();
 
         Promise.all([
             cfFetch(url).then(function (r) { return r.json(); }),
@@ -572,15 +735,15 @@ define([], function () {
                     });
             }
 
+            if (data.summary) renderSummary(section, data.summary, data.total);
+
             if (data.comments.length === 0 && pendingComments.length === 0) {
-                list.innerHTML = '<div class="ec-empty">No comments yet. Be the first!</div>';
-                section.querySelector('#ec-summary').style.display = 'none';
+                list.innerHTML = '<div class="ec-empty">No comments in this view. Try adjusting your filters.</div>';
                 section.querySelector('#ec-pager').style.display = 'none'; return;
             }
 
             data.comments.forEach(function (c) { appendComment(section, list, c); });
             scroll.scrollTop = 0; updatePager(section);
-            if (data.summary) renderSummary(section, data.summary, data.total);
         }).catch(function (err) { isLoading = false; list.classList.remove('ec-fading'); showError(section, 'Failed to load: ' + err.message); });
     }
 
@@ -771,9 +934,33 @@ define([], function () {
                                 StarRating: null,
                                 ParentCommentId: pid
                             })
-                        }).then(function () {
+                        }).then(function (r) { return r.json(); }).then(function (data) {
+                            if (data.nameFlagged) {
+                                showError(section, 'Your display name has been flagged. Update your name in plugin settings.');
+                                return;
+                            }
+                            var replyBody = body;
                             resetReplyForm();
-                            loadComments(section, true);
+
+                            var pendingReply = {
+                                CommentId: data.CommentId,
+                                AuthorDisplayName: displayName,
+                                Body: replyBody,
+                                CreatedAt: new Date().toISOString(),
+                                ModerationStatus: 'awaiting',
+                                ParentCommentId: pid,
+                                StarRating: null,
+                                AvatarBlob: userAvatarBlob
+                            };
+                            pendingComments.push(pendingReply);
+
+                            var pendingEl = createPendingCommentEl(pendingReply, true);
+                            var rf = section.querySelector('#ec-rf-' + pid);
+                            if (rf) {
+                                list.insertBefore(pendingEl, rf);
+                            }
+
+                            hasPendingActivity = true;
                             startModerationPoll(section);
                         }).catch(function (err) {
                             showError(section, 'Failed to post reply: ' + err.message);
@@ -973,7 +1160,35 @@ define([], function () {
                 if (deleteTimeout) clearTimeout(deleteTimeout);
                 cfFetch(apiEndpoint + '/comments/' + comment.CommentId, { method: 'DELETE', headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ UserUuid: userUuid })
-                }).then(function () { loadComments(section, true); });
+                }).then(function () {
+                    var toRemove;
+                    var countToSubtract;
+
+                    if (isReply) {
+                        toRemove = [el];
+                        countToSubtract = 1;
+                    } else {
+                        toRemove = collectCommentGroup(el);
+                        countToSubtract = 1 + (comment.ReplyCount || 0);
+                    }
+
+                    removeCommentElements(toRemove, function () {
+                        commentTotal = Math.max(0, commentTotal - countToSubtract);
+                        updatePager(section);
+
+                        var metaEl = section.querySelector('.ec-avg-meta');
+                        if (metaEl) {
+                            metaEl.textContent = metaEl.textContent.replace(/\d+ comments?/, commentTotal + ' comment' + (commentTotal !== 1 ? 's' : ''));
+                        }
+
+                        var remaining = list.querySelectorAll('.ec-c');
+                        if (remaining.length === 0) {
+                            list.innerHTML = '<div class="ec-empty">No comments yet. Be the first!</div>';
+                            section.querySelector('#ec-summary').style.display = 'none';
+                            section.querySelector('#ec-pager').style.display = 'none';
+                        }
+                    });
+                });
             });
         }
     }
@@ -1028,8 +1243,69 @@ define([], function () {
         return Math.floor(mo / 12) + 'y';
     }
 
+    function transitionToApproved(el, snapshot, section, list) {
+        var isReply = el.classList.contains('reply');
+        var commentId = el.dataset.commentId;
+        var commentObj = {
+            CommentId: commentId,
+            AuthorDisplayName: snapshot.AuthorDisplayName,
+            Body: snapshot.Body,
+            CreatedAt: snapshot.CreatedAt,
+            StarRating: snapshot.StarRating,
+            AvatarBlob: snapshot.AvatarBlob,
+            AuthorUuid: userUuid,
+            LikeCount: 0,
+            DislikeCount: 0,
+            ModerationStatus: 'approved',
+            Explicit: 0,
+            ReplyCount: 0
+        };
+        var newEl = createCommentEl(commentObj, isReply);
+
+        // Add temporary approved badge
+        var topRow = newEl.querySelector('.ec-c-top');
+        if (topRow) {
+            var badge = document.createElement('span');
+            badge.className = 'ec-mod-badge ec-approved-badge';
+            badge.innerHTML = '&#10003; Approved';
+            topRow.insertBefore(badge, topRow.children[1] || null);
+            setTimeout(function () {
+                badge.classList.add('ec-removing');
+                setTimeout(function () { if (badge.parentNode) badge.remove(); }, 250);
+            }, 3000);
+        }
+
+        if (el.parentNode) el.parentNode.replaceChild(newEl, el);
+        wireActions(section, list, newEl, commentObj, isReply);
+    }
+
+    function transitionToDenied(el, pending) {
+        var isReply = el.classList.contains('reply');
+        var newEl = createPendingCommentEl(pending, isReply);
+        if (el.parentNode) el.parentNode.replaceChild(newEl, el);
+    }
+
     function showError(section, msg) { var el = section.querySelector('#ec-error'); if (el) { el.textContent = msg; el.style.display = 'block'; } }
     function esc(str) { if (!str) return ''; return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+
+    function collectCommentGroup(el) {
+        var elements = [el];
+        var sib = el.nextElementSibling;
+        while (sib) {
+            if (sib.classList.contains('ec-c') && !sib.classList.contains('reply')) break;
+            elements.push(sib);
+            sib = sib.nextElementSibling;
+        }
+        return elements;
+    }
+
+    function removeCommentElements(elements, callback) {
+        elements.forEach(function (node) { node.classList.add('ec-removing'); });
+        setTimeout(function () {
+            elements.forEach(function (node) { if (node.parentNode) node.parentNode.removeChild(node); });
+            if (callback) callback();
+        }, 250);
+    }
 
     init();
 

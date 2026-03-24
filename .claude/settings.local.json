@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find c:/Users/chris/source/repos/EmbyComments/emby-comments-worker -type f -name *init* -o -name *schema*)",
+      "Bash(find c:UserschrissourcereposEmbyCommentsemby-comments-worker -name *.sql -o -name *.js -o -name schema*)"
+    ]
+  }
+}
