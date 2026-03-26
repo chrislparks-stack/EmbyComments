@@ -31,6 +31,7 @@ define([], function () {
     var initResolve = null;
     var initReady = new Promise(function (resolve) { initResolve = resolve; });
     var serverLocalOnly = false;
+    var banInfo = null;
     var initRetries = 0;
     var MAX_INIT_RETRIES = 10;
 
@@ -181,6 +182,7 @@ define([], function () {
         pendingComments = [];
         hasPendingActivity = false;
         userModerationStatus = 'approved';
+        banInfo = null;
         if (moderationPollTimer) { clearInterval(moderationPollTimer); moderationPollTimer = null; }
         moderationPollCount = 0;
     }
@@ -281,8 +283,9 @@ define([], function () {
                 censorExplicit = data.censorExplicit || false;
                 currentSort = data.sortPreference || 'newest';
                 languageFilter = data.languageFilter || [];
+                banInfo = data.ban || null;
             })
-            .catch(function () { reactionsMap = {}; hiddenSet = {}; reportedSet = {}; userModerationStatus = 'approved'; censorExplicit = false; });
+            .catch(function () { reactionsMap = {}; hiddenSet = {}; reportedSet = {}; userModerationStatus = 'approved'; censorExplicit = false; banInfo = null; });
     }
 
     function fetchMyPending() {
@@ -339,11 +342,24 @@ define([], function () {
 
     function updateFormVisibility(section) {
         var nameWarning = section.querySelector('#ec-name-warning');
+        var banWarning = section.querySelector('#ec-ban-warning');
         var formToggle = section.querySelector('#ec-form-toggle');
-        if (userModerationStatus === 'denied') {
+        if (banInfo) {
+            nameWarning.style.display = 'none';
+            if (banInfo.banType === 'permanent') {
+                banWarning.innerHTML = WARNING_SVG + ' Your account has been permanently banned from posting comments due to repeated violations.';
+            } else {
+                var expiry = new Date(banInfo.expiresAt);
+                banWarning.innerHTML = WARNING_SVG + ' You are temporarily banned from posting comments until ' + expiry.toLocaleTimeString() + '. Reason: ' + esc(banInfo.reason);
+            }
+            banWarning.style.display = 'flex';
+            formToggle.style.display = 'none';
+        } else if (userModerationStatus === 'denied') {
+            banWarning.style.display = 'none';
             nameWarning.style.display = 'flex';
             formToggle.style.display = 'none';
         } else {
+            banWarning.style.display = 'none';
             nameWarning.style.display = 'none';
         }
     }
@@ -375,6 +391,7 @@ define([], function () {
             '.ec-avg-meta { font-size:0.75em; opacity:0.55; }' +
             '.ec-spark { flex-shrink:0; } .ec-spark svg { display:block; }' +
             '.ec-name-warning { display:none; align-items:center; gap:0.5em; padding:0.6em 1em; margin-bottom:0.6em; border-radius:8px; background:rgba(231,76,60,0.1); border:1px solid rgba(231,76,60,0.25); color:#e74c3c; font-size:0.85em; }' +
+            '.ec-ban-warning { display:none; align-items:center; gap:0.5em; padding:0.6em 1em; margin-bottom:0.6em; border-radius:8px; background:rgba(231,76,60,0.1); border:1px solid rgba(231,76,60,0.25); color:#e74c3c; font-size:0.85em; }' +
             '.ec-form-toggle { background:color-mix(in srgb, currentColor 5%, transparent); border:1px solid color-mix(in srgb, currentColor 10%, transparent); border-radius:8px; color:inherit; opacity:0.5; cursor:pointer; font-size:0.85em; font-family:inherit; padding:0.6em 1em; margin-bottom:0.6em; display:block; width:100%; text-align:left; transition:all 0.2s; backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); }' +
             '.ec-form-toggle:hover { opacity:0.7; background:color-mix(in srgb, currentColor 8%, transparent); }' +
             '.ec-form { display:none; margin-bottom:0.8em; position:relative; } .ec-form.open { display:block; }' +
@@ -513,6 +530,7 @@ define([], function () {
             '<div class="ec-summary" id="ec-summary" style="display:none;"></div>' +
             '<div class="ec-error" id="ec-error"></div>' +
             '<div class="ec-name-warning" id="ec-name-warning">' + WARNING_SVG + ' Your display name has been flagged as inappropriate. You cannot post comments or replies until you update your name in the plugin settings.</div>' +
+            '<div class="ec-ban-warning" id="ec-ban-warning"></div>' +
             '<button class="ec-form-toggle" id="ec-form-toggle">\u270E  Write a comment...</button>' +
             '<div class="ec-form" id="ec-form">' +
             '<div class="ec-form-head">' +
@@ -590,6 +608,11 @@ define([], function () {
             cfFetch(apiEndpoint + '/comments', { method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ MediaKey: currentMediaKey, MediaTitle: item.Name || '', UserUuid: userUuid, Body: body, StarRating: selectedRating > 0 ? selectedRating : null, ParentCommentId: null, IsSpoiler: isSpoiler, StarOnly: starOnly })
             }).then(function (r) { return r.json(); }).then(function (data) {
+                if (data.banned) {
+                    banInfo = { banType: data.banType, reason: data.banReason, expiresAt: data.banExpiresAt };
+                    updateFormVisibility(section);
+                    return;
+                }
                 if (data.nameFlagged) {
                     showError(section, 'Your display name has been flagged as inappropriate. Update your name in plugin settings to post comments and replies.');
                     return;
@@ -1016,6 +1039,11 @@ define([], function () {
                                 ParentCommentId: pid
                             })
                         }).then(function (r) { return r.json(); }).then(function (data) {
+                            if (data.banned) {
+                                banInfo = { banType: data.banType, reason: data.banReason, expiresAt: data.banExpiresAt };
+                                updateFormVisibility(section);
+                                return;
+                            }
                             if (data.nameFlagged) {
                                 showError(section, 'Your display name has been flagged. Update your name in plugin settings.');
                                 return;
@@ -1156,7 +1184,7 @@ define([], function () {
             '<div class="ec-c-foot">' +
             '<button class="ec-c-act ec-like-btn' + (reaction === 'like' ? ' ec-liked' : '') + '" data-id="' + c.CommentId + '">' + (reaction === 'like' ? '\u2665' : '\u2661') + ' ' + (c.LikeCount || 0) + '</button>' +
             '<button class="ec-c-act ec-dislike-btn' + (reaction === 'dislike' ? ' ec-disliked' : '') + '" data-id="' + c.CommentId + '">' + THUMB_DOWN_SVG + ' ' + (c.DislikeCount || 0) + '</button>' +
-            (!isReply && userModerationStatus !== 'denied' ? '<button class="ec-c-act ec-reply-toggle" data-id="' + c.CommentId + '">\u21a9 Reply</button>' : '') +
+            (!isReply && userModerationStatus !== 'denied' && !banInfo ? '<button class="ec-c-act ec-reply-toggle" data-id="' + c.CommentId + '">\u21a9 Reply</button>' : '') +
             (!isOwn ? '<button class="ec-report-btn' + (reportedSet[c.CommentId] ? ' ec-reported' : '') + '" data-id="' + c.CommentId + '" title="Report comment">' + FLAG_SVG + (reportedSet[c.CommentId] ? ' Reported' : '') + '</button>' : '') +
             deleteHtml +
             '</div></div>';

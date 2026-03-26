@@ -9,7 +9,9 @@
       "Bash(node -c /c/Users/chris/source/repos/EmbyComments/Web/plugin.js)",
       "Bash(ls -la \"c:\\\\Users\\\\chris\\\\source\\\\repos\\\\EmbyComments\\\\emby-comments-worker\"\" | grep -E \".dev.vars)",
       "Bash(.env \")",
-      "Bash(node -c /c/Users/chris/source/repos/EmbyComments/emby-comments-worker/src/index.js)"
+      "Bash(node -c /c/Users/chris/source/repos/EmbyComments/emby-comments-worker/src/index.js)",
+      "Bash(npx wrangler:*)",
+      "Bash(dotnet build:*)"
     ]
   }
 }
