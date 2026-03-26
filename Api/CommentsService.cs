@@ -50,7 +50,8 @@ namespace EmbyComments.Api
             return new
             {
                 ApiEndpoint = config.ApiEndpoint,
-                UserDisplayNames = config.UserDisplayNames
+                UserDisplayNames = config.UserDisplayNames,
+                ServerLocalCommentsOnly = config.ServerLocalCommentsOnly
             };
         }
 

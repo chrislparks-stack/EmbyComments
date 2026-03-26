@@ -17,6 +17,7 @@ define([], function () {
 
     var reactionsMap = {};
     var hiddenSet = {};
+    var reportedSet = {};
     var userModerationStatus = 'approved';
     var pendingComments = [];
     var hasPendingActivity = false;
@@ -27,6 +28,9 @@ define([], function () {
     var moderationPollTimer = null;
     var moderationPollCount = 0;
     var sessionToken = null;
+    var initResolve = null;
+    var initReady = new Promise(function (resolve) { initResolve = resolve; });
+    var serverLocalOnly = false;
     var initRetries = 0;
     var MAX_INIT_RETRIES = 10;
 
@@ -36,6 +40,7 @@ define([], function () {
     var TRASH_SVG = '<svg viewBox="0 0 24 24" width="12" height="12" style="vertical-align:-1px;"><path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>';
     var WARNING_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" style="vertical-align:-2px;"><path fill="currentColor" d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>';
     var SHIELD_SVG = '<svg viewBox="0 0 24 24" width="12" height="12" style="vertical-align:-1px;"><path fill="currentColor" d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-1 17.93C7.05 17.74 5 14.49 5 11V6.3l7-3.11 7 3.11V11c0 3.49-2.05 6.74-6 7.93V18h-1v.93zM10 14.17l-2.59-2.58L6 13l4 4 8-8-1.41-1.42L10 14.17z"/></svg>';
+    var FLAG_SVG = '<svg viewBox="0 0 24 24" width="12" height="12" style="vertical-align:-1px;"><path fill="currentColor" d="M14.4 6l-.4-2H5v17h2v-7h5.6l.4 2H19V6h-4.6z"/></svg>';
 
 
     var avatarColors = [
@@ -65,6 +70,7 @@ define([], function () {
 
         ApiClient.getJSON(ApiClient.getUrl('embycomments/config')).then(function (config) {
             apiEndpoint = config.ApiEndpoint;
+            serverLocalOnly = !!config.ServerLocalCommentsOnly;
             serverGuid = ApiClient.serverId();
 
             var userId = ApiClient.getCurrentUserId();
@@ -105,9 +111,15 @@ define([], function () {
                 sessionToken = data.token;
                 userAvatarBlob = data.AvatarBlob || null;
                 initRetries = 0;
-                startObserver();
+                initResolve();
             }).catch(function () { setTimeout(init, 3000); });
         }).catch(function () { setTimeout(init, 3000); });
+    }
+
+    function refreshConfig() {
+        return ApiClient.getJSON(ApiClient.getUrl('embycomments/config')).then(function (config) {
+            serverLocalOnly = !!config.ServerLocalCommentsOnly;
+        }).catch(function () { /* keep existing value */ });
     }
 
     function refreshToken() {
@@ -183,8 +195,21 @@ define([], function () {
 
     function waitAndInject(attempts, itemId) {
         var anchor = getVisibleAnchor();
-        if (anchor && !document.getElementById('embycomments-section')) checkAndInject(itemId);
-        else if (!anchor && attempts < 30) setTimeout(function () { waitAndInject(attempts + 1, itemId); }, 200);
+        if (anchor && !document.getElementById('embycomments-section')) { checkAndInject(itemId); return; }
+        if (attempts >= 50) return;
+
+        // Use MutationObserver for instant detection, fall back to polling
+        var observer = new MutationObserver(function () {
+            var a = getVisibleAnchor();
+            if (a && !document.getElementById('embycomments-section')) {
+                observer.disconnect();
+                checkAndInject(itemId);
+            }
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+
+        // Safety timeout to disconnect observer if anchor never appears
+        setTimeout(function () { observer.disconnect(); }, 10000);
     }
 
     function checkAndInject(itemId) {
@@ -199,8 +224,19 @@ define([], function () {
 
         lastInjectedItemId = itemId;
 
+        // Inject skeleton section immediately — before any API calls
+        var section = document.createElement('div');
+        section.id = 'embycomments-section';
+        section.className = 'verticalSection verticalSection-cards';
+        section.innerHTML = buildSectionHtml();
+        anchor.parentNode.insertBefore(section, anchor);
+
         ApiClient.getItem(ApiClient.getCurrentUserId(), itemId).then(function (item) {
-            if (!isSupported(item)) return;
+            if (!isSupported(item)) {
+                section.remove();
+                lastInjectedItemId = null;
+                return;
+            }
 
             currentMediaKey = getMediaKey(item);
             currentItemName = item.Name || '';
@@ -211,26 +247,22 @@ define([], function () {
             hiddenSet = {};
             pendingComments = [];
 
-            var section = document.createElement('div');
-            section.id = 'embycomments-section';
-            section.className = 'verticalSection verticalSection-cards';
-            section.innerHTML = buildSectionHtml();
-
-            var freshAnchor = getVisibleAnchor();
-            if (freshAnchor && freshAnchor.parentNode) freshAnchor.parentNode.insertBefore(section, freshAnchor);
-            else { lastInjectedItemId = null; return; }
-
             setupStars(section);
             setupSubmit(section, item);
             setupFormToggle(section);
             setupPagination(section);
             setupToolbar(section);
 
-            Promise.all([fetchMyState(), fetchMyPending()]).then(function () {
+            initReady.then(function () {
+                return Promise.all([fetchMyState(), fetchMyPending(), refreshConfig()]);
+            }).then(function () {
                 updateFormVisibility(section);
                 applyToolbarState(section);
                 loadComments(section);
             });
+        }).catch(function () {
+            section.remove();
+            lastInjectedItemId = null;
         });
     }
 
@@ -243,12 +275,14 @@ define([], function () {
                 (data.reactions || []).forEach(function (r) { reactionsMap[r.CommentId] = r.Type; });
                 hiddenSet = {};
                 (data.hidden || []).forEach(function (id) { hiddenSet[id] = true; });
+                reportedSet = {};
+                (data.reported || []).forEach(function (id) { reportedSet[id] = true; });
                 userModerationStatus = data.userModerationStatus || 'approved';
                 censorExplicit = data.censorExplicit || false;
                 currentSort = data.sortPreference || 'newest';
                 languageFilter = data.languageFilter || [];
             })
-            .catch(function () { reactionsMap = {}; hiddenSet = {}; userModerationStatus = 'approved'; censorExplicit = false; });
+            .catch(function () { reactionsMap = {}; hiddenSet = {}; reportedSet = {}; userModerationStatus = 'approved'; censorExplicit = false; });
     }
 
     function fetchMyPending() {
@@ -411,10 +445,28 @@ define([], function () {
             '.ec-c:hover .ec-hide-btn { opacity:0.25; } .ec-hide-btn:hover { opacity:0.5; background:color-mix(in srgb, currentColor 5%, transparent); }' +
             '.ec-c-text { font-size:0.85em; opacity:0.75; line-height:1.5; margin-top:3px; overflow-wrap:break-word; }' +
             '.ec-c-foot { display:flex; align-items:center; gap:0.4em; margin-top:5px; }' +
-            '.ec-c-act { background:none; border:none; color:inherit; opacity:0.2; cursor:pointer; font-size:0.72em; font-family:inherit; padding:2px 5px; border-radius:4px; transition:all 0.15s; display:inline-flex; align-items:center; gap:3px; }' +
-            '.ec-c-act:hover { background:color-mix(in srgb, currentColor 5%, transparent); opacity:0.4; }' +
+            '.ec-c-act { background:none; border:none; color:inherit; opacity:0.5; cursor:pointer; font-size:0.72em; font-family:inherit; padding:2px 5px; border-radius:4px; transition:all 0.15s; display:inline-flex; align-items:center; gap:3px; }' +
+            '.ec-c-act:hover { background:color-mix(in srgb, currentColor 5%, transparent); opacity:0.7; }' +
             '.ec-c-act.ec-liked { color:#e74c3c; opacity:1; } .ec-c-act.ec-liked:hover { color:#c0392b; }' +
             '.ec-c-act.ec-disliked { color:#3498db; opacity:1; } .ec-c-act.ec-disliked:hover { color:#2980b9; }' +
+            '.ec-report-btn { background:none; border:none; color:#e74c3c; opacity:0.35; cursor:pointer; padding:2px 4px; border-radius:3px; transition:all 0.15s; margin-left:auto; line-height:1; display:inline-flex; align-items:center; gap:3px; font-size:0.72em; font-family:inherit; }' +
+            '.ec-report-btn:hover { opacity:1; background:rgba(231,76,60,0.12); }' +
+            '.ec-report-btn.ec-reported { opacity:0.5; cursor:default; } .ec-report-btn.ec-reported:hover { opacity:0.5; background:none; }' +
+            '.ec-report-picker { position:fixed; z-index:10000; background:color-mix(in srgb, currentColor 8%, transparent); backdrop-filter:blur(16px); -webkit-backdrop-filter:blur(16px); border:1px solid color-mix(in srgb, currentColor 12%, transparent); border-radius:8px; padding:6px; box-shadow:0 4px 16px rgba(0,0,0,0.25); min-width:150px; }' +
+            '.ec-report-title { font-size:0.75em; opacity:0.5; padding:3px 8px 5px; }' +
+            '.ec-report-reason { display:block; width:100%; background:none; border:none; color:inherit; font-family:inherit; font-size:0.8em; padding:6px 10px; border-radius:4px; cursor:pointer; text-align:left; opacity:0.6; transition:all 0.12s; }' +
+            '.ec-report-reason:hover { opacity:1; background:rgba(231,76,60,0.15); color:#e74c3c; }' +
+            '.ec-report-other { display:flex; gap:4px; padding:4px 6px; border-top:1px solid color-mix(in srgb, currentColor 8%, transparent); margin-top:4px; padding-top:8px; }' +
+            '.ec-report-other-input { flex:1; min-width:0; background:color-mix(in srgb, currentColor 5%, transparent); border:1px solid color-mix(in srgb, currentColor 10%, transparent); border-radius:4px; color:inherit; font-family:inherit; font-size:0.75em; padding:4px 6px; outline:none; }' +
+            '.ec-report-other-input:focus { border-color:color-mix(in srgb, currentColor 20%, transparent); }' +
+            '.ec-report-other-submit { background:rgba(231,76,60,0.15); border:1px solid rgba(231,76,60,0.25); border-radius:4px; color:#e74c3c; font-family:inherit; font-size:0.72em; padding:4px 8px; cursor:pointer; white-space:nowrap; transition:all 0.12s; }' +
+            '.ec-report-other-submit:hover { background:rgba(231,76,60,0.25); }' +
+            '.ec-c.ec-user-reported { background:rgba(231,76,60,0.06); border-color:rgba(231,76,60,0.15); }' +
+            '.ec-c.ec-user-reported:hover { background:rgba(231,76,60,0.09); border-color:rgba(231,76,60,0.2); }' +
+            '.ec-c.ec-user-reported .ec-c-text { display:none; }' +
+            '.ec-c.ec-user-reported .ec-spoiler-wrap { display:none; }' +
+            '.ec-reported-bar { display:none; align-items:center; gap:0.5em; font-size:0.78em; color:#e74c3c; opacity:0.7; padding:2px 0; }' +
+            '.ec-c.ec-user-reported .ec-reported-bar { display:flex; }' +
             '.ec-delete-btn { background:none; border:none; color:inherit; opacity:0.1; cursor:pointer; padding:2px 4px; border-radius:3px; transition:all 0.15s; margin-left:auto; line-height:1; display:inline-flex; align-items:center; gap:3px; font-size:0.72em; font-family:inherit; }' +
             '.ec-c:hover .ec-delete-btn { opacity:0.2; } .ec-delete-btn:hover { color:#e74c3c; opacity:1; background:rgba(231,76,60,0.08); }' +
             '.ec-delete-confirm { display:none; font-size:0.72em; color:#e74c3c; margin-left:auto; align-items:center; gap:4px; } .ec-delete-confirm.ec-active { display:inline-flex; }' +
@@ -432,6 +484,13 @@ define([], function () {
             '.ec-empty { opacity:0.3; padding:1em 0; font-size:0.85em; }' +
             '.ec-error { color:#ff4444; padding:0.5em; background:rgba(255,0,0,0.08); border-radius:6px; margin-bottom:0.5em; display:none; font-size:0.8em; }' +
             '.ec-loading { text-align:center; padding:0.8em 0; opacity:0.2; font-size:0.8em; }' +
+            '@keyframes ec-shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }' +
+            '.ec-skel { display:flex; gap:0.7em; padding:0.7em 0.8em; border-radius:8px; background:color-mix(in srgb, currentColor 5%, transparent); border:1px solid color-mix(in srgb, currentColor 6%, transparent); }' +
+            '.ec-skel-bone { border-radius:4px; background:linear-gradient(90deg, color-mix(in srgb, currentColor 6%, transparent) 25%, color-mix(in srgb, currentColor 10%, transparent) 50%, color-mix(in srgb, currentColor 6%, transparent) 75%); background-size:200% 100%; animation:ec-shimmer 1.5s ease-in-out infinite; }' +
+            '.ec-skel-avatar { width:32px; height:32px; border-radius:50%; flex-shrink:0; }' +
+            '.ec-skel-body { flex:1; display:flex; flex-direction:column; gap:6px; }' +
+            '.ec-skel-line { height:10px; }' +
+            '.ec-skel-line.w60 { width:60%; } .ec-skel-line.w80 { width:80%; } .ec-skel-line.w45 { width:45%; } .ec-skel-line.w70 { width:70%; } .ec-skel-line.w35 { width:35%; }' +
             '.ec-toolbar { display:flex; align-items:center; gap:0.8em; padding:0.5em 0; margin-bottom:0.4em; border-bottom:1px solid color-mix(in srgb, currentColor 6%, transparent); flex-wrap:wrap; }' +
             '.ec-toolbar-group { display:flex; align-items:center; gap:0.35em; }' +
             '.ec-toolbar-label { font-size:0.72em; opacity:0.35; white-space:nowrap; }' +
@@ -467,7 +526,13 @@ define([], function () {
             '<div class="ec-toolbar-group"><label class="ec-toolbar-label">Language</label><div class="ec-drop-wrap"><button class="ec-toolbar-btn" id="ec-lang-btn">All Languages \u25be</button><div class="ec-dropdown" id="ec-lang-dropdown"></div></div></div>' +
             '<button class="ec-censor-btn" id="ec-censor-toggle" type="button">' + WARNING_SVG + ' Censor explicit</button>' +
             '</div>' +
-            '<div class="ec-scroll" id="ec-scroll"><div class="ec-list" id="ec-list"><div class="ec-loading">Loading...</div></div></div>' +
+            '<div class="ec-scroll" id="ec-scroll"><div class="ec-list" id="ec-list">' +
+            '<div class="ec-skel"><div class="ec-skel-bone ec-skel-avatar"></div><div class="ec-skel-body"><div class="ec-skel-bone ec-skel-line w45" style="height:8px;margin-bottom:2px"></div><div class="ec-skel-bone ec-skel-line w80"></div><div class="ec-skel-bone ec-skel-line w60"></div></div></div>' +
+            '<div class="ec-skel"><div class="ec-skel-bone ec-skel-avatar"></div><div class="ec-skel-body"><div class="ec-skel-bone ec-skel-line w45" style="height:8px;margin-bottom:2px"></div><div class="ec-skel-bone ec-skel-line w70"></div><div class="ec-skel-bone ec-skel-line w45"></div></div></div>' +
+            '<div class="ec-skel"><div class="ec-skel-bone ec-skel-avatar"></div><div class="ec-skel-body"><div class="ec-skel-bone ec-skel-line w45" style="height:8px;margin-bottom:2px"></div><div class="ec-skel-bone ec-skel-line w60"></div><div class="ec-skel-bone ec-skel-line w35"></div></div></div>' +
+            '<div class="ec-skel"><div class="ec-skel-bone ec-skel-avatar"></div><div class="ec-skel-body"><div class="ec-skel-bone ec-skel-line w45" style="height:8px;margin-bottom:2px"></div><div class="ec-skel-bone ec-skel-line w80"></div><div class="ec-skel-bone ec-skel-line w70"></div></div></div>' +
+            '<div class="ec-skel"><div class="ec-skel-bone ec-skel-avatar"></div><div class="ec-skel-body"><div class="ec-skel-bone ec-skel-line w45" style="height:8px;margin-bottom:2px"></div><div class="ec-skel-bone ec-skel-line w45"></div><div class="ec-skel-bone ec-skel-line w60"></div></div></div>' +
+            '</div></div>' +
             '<div class="ec-pager" id="ec-pager" style="display:none;"><span class="ec-pager-info" id="ec-pager-info"></span>' +
             '<div class="ec-pager-btns"><button class="ec-pager-btn" id="ec-prev" disabled>\u2039 Prev</button><button class="ec-pager-btn" id="ec-next" disabled>Next \u203A</button></div></div></div>';
     }
@@ -704,14 +769,30 @@ define([], function () {
         section.querySelector('#ec-next').disabled = (currentPage >= tp - 1);
     }
 
+    function buildSkeletons(count) {
+        var widths = ['w80', 'w60', 'w45', 'w70', 'w35'];
+        var html = '';
+        for (var i = 0; i < count; i++) {
+            html += '<div class="ec-skel">' +
+                '<div class="ec-skel-bone ec-skel-avatar"></div>' +
+                '<div class="ec-skel-body">' +
+                '<div class="ec-skel-bone ec-skel-line w45" style="height:8px;margin-bottom:2px;"></div>' +
+                '<div class="ec-skel-bone ec-skel-line ' + widths[i % widths.length] + '"></div>' +
+                '<div class="ec-skel-bone ec-skel-line ' + widths[(i + 2) % widths.length] + '"></div>' +
+                '</div></div>';
+        }
+        return html;
+    }
+
     function loadComments(section, bustCache) {
         if (!currentMediaKey || !apiEndpoint || isLoading) return;
         isLoading = true;
         var list = section.querySelector('#ec-list'), scroll = section.querySelector('#ec-scroll');
-        var hasExisting = list.children.length > 0 && !list.querySelector('.ec-loading');
-        if (hasExisting) list.classList.add('ec-fading'); else list.innerHTML = '<div class="ec-loading">Loading...</div>';
+        var hasExisting = list.children.length > 0 && !list.querySelector('.ec-skel');
+        if (hasExisting) list.classList.add('ec-fading'); else list.innerHTML = buildSkeletons(5);
 
         var url = apiEndpoint + '/comments?mediaKey=' + encodeURIComponent(currentMediaKey) + '&limit=' + PAGE_SIZE + '&offset=' + (currentPage * PAGE_SIZE) + '&sort=' + currentSort;
+        if (serverLocalOnly && serverGuid) url += '&serverGuid=' + encodeURIComponent(serverGuid);
         if (languageFilter.length > 0) url += '&language=' + encodeURIComponent(languageFilter.join(','));
         if (bustCache) url += '&_t=' + Date.now();
 
@@ -1004,6 +1085,7 @@ define([], function () {
         var isExplicit = c.Explicit === 1;
 
         if (isHidden) div.classList.add('ec-is-hidden');
+        if (reportedSet[c.CommentId]) div.classList.add('ec-user-reported');
         if (!c.Body) div.classList.add('ec-star-only');
 
         // Explicit collapsed card — blurred text with overlay, delete only
@@ -1070,10 +1152,12 @@ define([], function () {
             '<button class="ec-hide-btn" data-id="' + c.CommentId + '" title="Hide comment">' + EYE_SVG + '</button>' +
             '</div>' +
             textHtml +
+            '<div class="ec-reported-bar">' + FLAG_SVG + ' This comment has been reported and is awaiting moderator review</div>' +
             '<div class="ec-c-foot">' +
             '<button class="ec-c-act ec-like-btn' + (reaction === 'like' ? ' ec-liked' : '') + '" data-id="' + c.CommentId + '">' + (reaction === 'like' ? '\u2665' : '\u2661') + ' ' + (c.LikeCount || 0) + '</button>' +
             '<button class="ec-c-act ec-dislike-btn' + (reaction === 'dislike' ? ' ec-disliked' : '') + '" data-id="' + c.CommentId + '">' + THUMB_DOWN_SVG + ' ' + (c.DislikeCount || 0) + '</button>' +
             (!isReply && userModerationStatus !== 'denied' ? '<button class="ec-c-act ec-reply-toggle" data-id="' + c.CommentId + '">\u21a9 Reply</button>' : '') +
+            (!isOwn ? '<button class="ec-report-btn' + (reportedSet[c.CommentId] ? ' ec-reported' : '') + '" data-id="' + c.CommentId + '" title="Report comment">' + FLAG_SVG + (reportedSet[c.CommentId] ? ' Reported' : '') + '</button>' : '') +
             deleteHtml +
             '</div></div>';
 
@@ -1135,6 +1219,87 @@ define([], function () {
                 }).then(function (r) { return r.json(); }).then(function (data) {
                     if (!data.hidden) { delete hiddenSet[cid]; el.classList.remove('ec-is-hidden'); }
                 });
+            });
+        }
+
+        // Report button with reason picker
+        var reportBtn = el.querySelector('.ec-report-btn');
+        if (reportBtn && !reportBtn.classList.contains('ec-reported')) {
+            reportBtn.addEventListener('click', function () {
+                // Remove any existing picker
+                var existing = document.querySelector('.ec-report-picker');
+                if (existing) { existing.remove(); return; }
+
+                var picker = document.createElement('div');
+                picker.className = 'ec-report-picker';
+                var reasons = [
+                    { value: 'spam', label: 'Spam' },
+                    { value: 'harassment', label: 'Harassment' },
+                    { value: 'unmarked_spoiler', label: 'Unmarked Spoiler' },
+                    { value: 'off_topic', label: 'Off-topic' },
+                    { value: 'inappropriate', label: 'Inappropriate' }
+                ];
+                picker.innerHTML = '<div class="ec-report-title">Report reason:</div>' +
+                    reasons.map(function (r) { return '<button class="ec-report-reason" data-reason="' + r.value + '">' + r.label + '</button>'; }).join('') +
+                    '<div class="ec-report-other"><input class="ec-report-other-input" type="text" placeholder="Other reason..." maxlength="100"><button class="ec-report-other-submit">Submit</button></div>';
+
+                function submitReport(reason) {
+                    cfFetch(apiEndpoint + '/report', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ CommentId: comment.CommentId, UserUuid: userUuid, Reason: reason })
+                    }).then(function (r) { return r.json(); }).then(function (data) {
+                        if (data.ok) {
+                            reportedSet[comment.CommentId] = true;
+                            reportBtn.classList.add('ec-reported');
+                            reportBtn.innerHTML = FLAG_SVG + ' Reported';
+                            el.classList.add('ec-user-reported');
+                        }
+                        picker.remove();
+                    }).catch(function () { picker.remove(); });
+                }
+
+                // Position fixed relative to button
+                document.body.appendChild(picker);
+                var rect = reportBtn.getBoundingClientRect();
+                var pickerH = picker.offsetHeight;
+                var spaceAbove = rect.top;
+                var spaceBelow = window.innerHeight - rect.bottom;
+
+                picker.style.left = Math.min(rect.right - picker.offsetWidth, window.innerWidth - picker.offsetWidth - 8) + 'px';
+                if (spaceAbove > pickerH || spaceAbove > spaceBelow) {
+                    picker.style.top = (rect.top - pickerH - 4) + 'px';
+                } else {
+                    picker.style.top = (rect.bottom + 4) + 'px';
+                }
+
+                picker.querySelectorAll('.ec-report-reason').forEach(function (btn) {
+                    btn.addEventListener('click', function () { submitReport(btn.dataset.reason); });
+                });
+
+                var otherInput = picker.querySelector('.ec-report-other-input');
+                var otherSubmit = picker.querySelector('.ec-report-other-submit');
+                otherSubmit.addEventListener('click', function () {
+                    var text = otherInput.value.trim();
+                    if (text) submitReport('other:' + text);
+                });
+                otherInput.addEventListener('keydown', function (e) {
+                    if (e.key === 'Enter') { var text = otherInput.value.trim(); if (text) submitReport('other:' + text); }
+                });
+
+                // Close picker when clicking outside or scrolling
+                function removePicker() {
+                    picker.remove();
+                    document.removeEventListener('click', closePicker);
+                    window.removeEventListener('scroll', closeOnScroll, true);
+                }
+                function closePicker(e) {
+                    if (!picker.contains(e.target) && e.target !== reportBtn) removePicker();
+                }
+                function closeOnScroll() { removePicker(); }
+                setTimeout(function () {
+                    document.addEventListener('click', closePicker);
+                    window.addEventListener('scroll', closeOnScroll, true);
+                }, 0);
             });
         }
 
@@ -1226,7 +1391,9 @@ define([], function () {
 
     function loadRemainingReplies(section, list, parentId, moreBtn, skipCount) {
         moreBtn.textContent = 'Loading...'; moreBtn.disabled = true;
-        cfFetch(apiEndpoint + '/replies?parentId=' + encodeURIComponent(parentId) + '&offset=' + skipCount)
+        var repliesUrl = apiEndpoint + '/replies?parentId=' + encodeURIComponent(parentId) + '&offset=' + skipCount;
+        if (serverLocalOnly && serverGuid) repliesUrl += '&serverGuid=' + encodeURIComponent(serverGuid);
+        cfFetch(repliesUrl)
             .then(function (r) { return r.json(); }).then(function (replies) {
                 replies.forEach(function (r) { var re = createCommentEl(r, true); list.insertBefore(re, moreBtn); wireActions(section, list, re, r, true); });
                 moreBtn.remove();
@@ -1308,6 +1475,7 @@ define([], function () {
     }
 
     init();
+    startObserver();
 
     function EmbyCommentsPlugin() { this.id = 'a4b7c2d1-e5f6-4a3b-8c9d-0e1f2a3b4c5d'; this.name = 'Emby Comments'; }
     return EmbyCommentsPlugin;

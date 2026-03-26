@@ -34,6 +34,11 @@ namespace EmbyComments
         /// </summary>
         public string ServerId { get; set; } = string.Empty;
 
+        /// <summary>
+        /// When true, only comments from users on this Emby server are displayed.
+        /// </summary>
+        public bool ServerLocalCommentsOnly { get; set; }
+
         public string GetDisplayName(string userId)
         {
             return UserDisplayNames.FirstOrDefault(e => e.UserId == userId)?.DisplayName ?? string.Empty;

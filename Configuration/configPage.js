@@ -49,6 +49,8 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
     }
 
     function hasChanges(instance) {
+        var chk = instance.view.querySelector('#chkServerLocalOnly');
+        if (chk && chk.checked !== !!instance.originalLocalOnly) return true;
         var inputs = instance.view.querySelectorAll('input[data-user-id]');
         for (var i = 0; i < inputs.length; i++) {
             if (inputs[i].value.trim() !== (instance.originalValues[inputs[i].dataset.userId] || '')) return true;
@@ -61,6 +63,8 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
         instance.view.querySelectorAll('input[data-user-id]').forEach(function (input) {
             instance.originalValues[input.dataset.userId] = input.value.trim();
         });
+        var chk = instance.view.querySelector('#chkServerLocalOnly');
+        instance.originalLocalOnly = chk ? chk.checked : false;
     }
 
     function setNameStatus(warning, status, reason) {
@@ -292,6 +296,8 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
             ApiClient.ajax({ type: 'GET', url: ApiClient.getUrl('Users'), dataType: 'json' }).then(function (users) {
                 ApiClient.getPluginConfiguration(pluginId).then(function (config) {
                     instance.apiEndpoint = config.ApiEndpoint;
+                    var chk = view.querySelector('#chkServerLocalOnly');
+                    if (chk) chk.checked = !!config.ServerLocalCommentsOnly;
                     var entries = config.UserDisplayNames || [];
 
                     // Auto-populate avatar paths for users that don't have one stored
@@ -372,6 +378,7 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
 
             ApiClient.getPluginConfiguration(pluginId).then(function (config) {
                 config.UserDisplayNames = entries;
+                config.ServerLocalCommentsOnly = !!view.querySelector('#chkServerLocalOnly').checked;
                 return ApiClient.updatePluginConfiguration(pluginId, config);
             }).then(function () {
                 return syncDisplayNamesToWorker(instance, inputs);
@@ -401,6 +408,13 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
         this.pollCount = 0;
         var instance = this;
         view.querySelector('form').addEventListener('submit', function (e) { onSubmit(instance, e); });
+        var chkLocal = view.querySelector('#chkServerLocalOnly');
+        if (chkLocal) {
+            chkLocal.addEventListener('change', function () {
+                var saveBtn = view.querySelector('.btnSaveAll');
+                if (saveBtn) saveBtn.disabled = !hasChanges(instance);
+            });
+        }
     }
 
     Object.assign(View.prototype, BaseView.prototype);
