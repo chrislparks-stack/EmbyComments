@@ -24,14 +24,16 @@ define([], function () {
     var censorExplicit = false;
     var currentSort = 'newest';
     var languageFilter = [];
+    var showOverallRatings = false;
     var LANGUAGES = ['English', 'Español', 'Français', 'Deutsch', 'Português', 'Italiano', 'Nederlands', 'Русский', '日本語', '한국어', '中文', 'العربية', 'हिन्दी', 'Türkçe', 'Polski', 'Svenska'];
-    var moderationPollTimer = null;
-    var moderationPollCount = 0;
+    var LANG_ENGLISH_MAP = { 'Español': 'Spanish', 'Français': 'French', 'Deutsch': 'German', 'Português': 'Portuguese', 'Italiano': 'Italian', 'Nederlands': 'Dutch', 'Русский': 'Russian', '日本語': 'Japanese', '한국어': 'Korean', '中文': 'Chinese', 'العربية': 'Arabic', 'हिन्दी': 'Hindi', 'Türkçe': 'Turkish', 'Polski': 'Polish', 'Svenska': 'Swedish' };
     var sessionToken = null;
     var initResolve = null;
     var initReady = new Promise(function (resolve) { initResolve = resolve; });
     var serverLocalOnly = false;
     var banInfo = null;
+    var banSocket = null;
+    var banSocketRetries = 0;
     var initRetries = 0;
     var MAX_INIT_RETRIES = 10;
 
@@ -183,8 +185,10 @@ define([], function () {
         hasPendingActivity = false;
         userModerationStatus = 'approved';
         banInfo = null;
-        if (moderationPollTimer) { clearInterval(moderationPollTimer); moderationPollTimer = null; }
-        moderationPollCount = 0;
+        stopBanListener();
+        stopModerationListener();
+        banSocketRetries = 0;
+        moderationSocketRetries = 0;
     }
 
     function getVisibleAnchor() {
@@ -261,6 +265,8 @@ define([], function () {
                 updateFormVisibility(section);
                 applyToolbarState(section);
                 loadComments(section);
+                startBanListener(section);
+                startModerationListener(section);
             });
         }).catch(function () {
             section.remove();
@@ -296,48 +302,150 @@ define([], function () {
             .catch(function () { pendingComments = []; });
     }
 
-    function startModerationPoll(section) {
-        if (moderationPollTimer) clearInterval(moderationPollTimer);
-        moderationPollCount = 0;
+    function handleBanChange(section, previousBan) {
+        var changed = (!previousBan && !banInfo) ? false
+            : (!previousBan || !banInfo) ? true
+            : previousBan.banType !== banInfo.banType || previousBan.expiresAt !== (banInfo.expiresAt || null);
+        if (!changed) return;
 
-        moderationPollTimer = setInterval(function () {
-            moderationPollCount++;
-            if (moderationPollCount >= 6 || !document.getElementById('embycomments-section')) {
-                clearInterval(moderationPollTimer);
-                moderationPollTimer = null;
-                return;
+        updateFormVisibility(section);
+
+        if (banInfo) {
+            var toggles = section.querySelectorAll('.ec-reply-toggle');
+            for (var i = 0; i < toggles.length; i++) toggles[i].style.display = 'none';
+            var openReplies = section.querySelectorAll('.ec-reply-inline.open');
+            for (var j = 0; j < openReplies.length; j++) openReplies[j].classList.remove('open');
+        } else if (previousBan) {
+            loadComments(section);
+        }
+    }
+
+    function startBanListener(section) {
+        stopBanListener();
+        if (!apiEndpoint || !userUuid || !sessionToken) return;
+
+        var wsUrl = apiEndpoint.replace('https://', 'wss://').replace('http://', 'ws://')
+            + '/ban-ws?userUuid=' + encodeURIComponent(userUuid)
+            + '&token=' + encodeURIComponent(sessionToken);
+
+        banSocket = new WebSocket(wsUrl);
+        banSocketRetries = 0;
+
+        banSocket.onmessage = function (event) {
+            try {
+                var prev = banInfo;
+                banInfo = JSON.parse(event.data).ban || null;
+                handleBanChange(section, prev);
+            } catch (e) {}
+        };
+
+        banSocket.onclose = function () {
+            banSocket = null;
+            if (!document.getElementById('embycomments-section')) return;
+            if (banSocketRetries < 3) {
+                banSocketRetries++;
+                refreshToken().then(function () {
+                    startBanListener(section);
+                }).catch(function () {});
             }
+        };
+    }
 
-            var awaitingSnapshot = {};
-            pendingComments
-                .filter(function (c) { return c.ModerationStatus === 'awaiting'; })
-                .forEach(function (c) { awaitingSnapshot[c.CommentId] = { AuthorDisplayName: c.AuthorDisplayName, Body: c.Body, CreatedAt: c.CreatedAt, StarRating: c.StarRating, AvatarBlob: c.AvatarBlob, ParentCommentId: c.ParentCommentId }; });
-            var awaitingIds = Object.keys(awaitingSnapshot);
+    function stopBanListener() {
+        if (banSocket) { banSocket.close(); banSocket = null; }
+    }
 
-            fetchMyPending().then(function () {
-                var list = section.querySelector('#ec-list');
-                if (!list) return;
+    var moderationSocket = null;
+    var moderationSocketRetries = 0;
 
-                awaitingIds.forEach(function (id) {
-                    var el = list.querySelector('.ec-c[data-comment-id="' + id + '"]');
-                    if (!el) return;
+    function startModerationListener(section) {
+        stopModerationListener();
+        if (!apiEndpoint || !userUuid || !sessionToken) return;
 
-                    var pending = pendingComments.find(function (c) { return c.CommentId === id; });
+        var wsUrl = apiEndpoint.replace('https://', 'wss://').replace('http://', 'ws://')
+            + '/moderation-ws?userUuid=' + encodeURIComponent(userUuid)
+            + '&token=' + encodeURIComponent(sessionToken);
 
-                    if (!pending) {
-                        transitionToApproved(el, awaitingSnapshot[id], section, list);
-                    } else if (pending.ModerationStatus === 'denied') {
-                        transitionToDenied(el, pending);
-                    }
-                });
+        moderationSocket = new WebSocket(wsUrl);
+        moderationSocketRetries = 0;
 
-                var stillAwaiting = pendingComments.some(function (c) { return c.ModerationStatus === 'awaiting'; });
-                if (!stillAwaiting) {
-                    clearInterval(moderationPollTimer);
-                    moderationPollTimer = null;
+        moderationSocket.onmessage = function (event) {
+            try {
+                var msg = JSON.parse(event.data);
+                handleModerationPush(section, msg);
+            } catch (e) {}
+        };
+
+        moderationSocket.onclose = function () {
+            moderationSocket = null;
+            if (!document.getElementById('embycomments-section')) return;
+            if (moderationSocketRetries < 3) {
+                moderationSocketRetries++;
+                refreshToken().then(function () {
+                    startModerationListener(section);
+                }).catch(function () {});
+            }
+        };
+    }
+
+    function stopModerationListener() {
+        if (moderationSocket) { moderationSocket.close(); moderationSocket = null; }
+    }
+
+    function handleModerationPush(section, msg) {
+        var commentId = msg.commentId;
+        if (!commentId) return;
+
+        var pendingIdx = -1;
+        for (var i = 0; i < pendingComments.length; i++) {
+            if (pendingComments[i].CommentId === commentId) { pendingIdx = i; break; }
+        }
+        if (pendingIdx === -1) return;
+
+        var pending = pendingComments[pendingIdx];
+        var list = section.querySelector('#ec-list');
+        var scroll = section.querySelector('#ec-scroll');
+        if (!list) return;
+        var el = list.querySelector('.ec-c[data-comment-id="' + commentId + '"]');
+        if (!el) return;
+
+        var isReply = !!pending.ParentCommentId;
+        var avatarSrc = pending.AvatarBlob || userAvatarBlob;
+        if (!avatarSrc) {
+            var existingImg = el.querySelector('.ec-avatar img');
+            if (existingImg) avatarSrc = existingImg.src;
+        }
+
+        if (msg.status === 'denied') {
+            pending.ModerationStatus = 'denied';
+            pending.DenialReason = msg.denialReason || 'Comment did not meet community guidelines';
+            transitionToDenied(el, pending);
+            var deniedEl = list.querySelector('.ec-c[data-comment-id="' + commentId + '"]');
+            if (deniedEl && scroll) highlightWhenVisible(deniedEl, scroll, true);
+        } else {
+            var snapshot = {
+                AuthorDisplayName: pending.AuthorDisplayName || displayName,
+                Body: pending.Body,
+                CreatedAt: pending.CreatedAt,
+                StarRating: pending.StarRating,
+                AvatarBlob: avatarSrc,
+                ParentCommentId: pending.ParentCommentId
+            };
+            transitionToApproved(el, snapshot, section, list);
+
+            var newEl = list.querySelector('.ec-c[data-comment-id="' + commentId + '"]');
+            if (newEl && scroll) {
+                if (isReply) {
+                    repositionReply(newEl, list, pending.ParentCommentId, scroll);
+                    highlightWhenVisible(newEl, scroll, false);
+                } else {
+                    var refNode = findSortInsertionPoint(list, snapshot);
+                    repositionElement(newEl, list, refNode, scroll);
+                    highlightWhenVisible(newEl, scroll, false);
                 }
-            });
-        }, 8000);
+            }
+        }
+        pendingComments.splice(pendingIdx, 1);
     }
 
     function updateFormVisibility(section) {
@@ -346,7 +454,14 @@ define([], function () {
         var formToggle = section.querySelector('#ec-form-toggle');
         if (banInfo) {
             nameWarning.style.display = 'none';
-            if (banInfo.banType === 'permanent') {
+            if (banInfo.isAdmin) {
+                if (banInfo.banType === 'permanent') {
+                    banWarning.innerHTML = WARNING_SVG + ' You have been permanently banned by a comments admin. Reason: ' + esc(banInfo.reason);
+                } else {
+                    var expiry = new Date(banInfo.expiresAt);
+                    banWarning.innerHTML = WARNING_SVG + ' You have been banned by a comments admin until ' + expiry.toLocaleTimeString() + '. Reason: ' + esc(banInfo.reason);
+                }
+            } else if (banInfo.banType === 'permanent') {
                 banWarning.innerHTML = WARNING_SVG + ' Your account has been permanently banned from posting comments due to repeated violations.';
             } else {
                 var expiry = new Date(banInfo.expiresAt);
@@ -361,6 +476,7 @@ define([], function () {
         } else {
             banWarning.style.display = 'none';
             nameWarning.style.display = 'none';
+            formToggle.style.display = '';
         }
     }
 
@@ -377,7 +493,7 @@ define([], function () {
 
     function buildSectionHtml() {
         return '<style>' +
-            '#embycomments-section { font-family:inherit; color:inherit; position:relative; z-index:10; }' +
+            '#embycomments-section { font-family:inherit; color:inherit; position:relative; }' +
             '.ec-content { padding-bottom:1.5em; }' +
             '.ec-summary { display:flex; align-items:center; gap:1em; padding:0.4em 0; margin-bottom:0.4em; flex-wrap:wrap; }' +
             '.ec-avg { display:flex; align-items:baseline; gap:0.25em; }' +
@@ -389,6 +505,13 @@ define([], function () {
             '.ec-avg-stars .ec-star-partial {position:relative;display:inline-block;color: color-mix(in srgb, currentColor 35%, transparent);}' +
             '.ec-avg-stars .ec-star-fill { position:absolute; left:0; top:0; overflow:hidden; color:#f5c518; opacity:1; }' +
             '.ec-avg-meta { font-size:0.75em; opacity:0.55; }' +
+            '.ec-scope-row { padding:0 0 0.4em; }' +
+            '.ec-scope-pill { display:inline-flex; border-radius:10px; border:1px solid color-mix(in srgb, currentColor 12%, transparent); overflow:hidden; }' +
+            '.ec-scope-opt { background:none; border:none; color:inherit; font-family:inherit; font-size:0.7em; padding:1px 10px; cursor:pointer; opacity:0.4; transition:all 0.2s; line-height:1.5; white-space:nowrap; min-width:52px; text-align:center; }' +
+            '.ec-scope-opt:hover { opacity:0.65; }' +
+            '.ec-scope-opt.active { background:color-mix(in srgb, currentColor 10%, transparent); opacity:0.85; }' +
+            '.ec-no-ratings { font-size:0.82em; opacity:0.4; padding:0.3em 0; font-style:italic; display:flex; align-items:center; gap:0.6em; }' +
+            '.ec-loading-state .ec-form-toggle, .ec-loading-state .ec-toolbar, .ec-loading-state .ec-summary, .ec-loading-state .ec-scope-row { pointer-events:none; opacity:0.3; }' +
             '.ec-spark { flex-shrink:0; } .ec-spark svg { display:block; }' +
             '.ec-name-warning { display:none; align-items:center; gap:0.5em; padding:0.6em 1em; margin-bottom:0.6em; border-radius:8px; background:rgba(231,76,60,0.1); border:1px solid rgba(231,76,60,0.25); color:#e74c3c; font-size:0.85em; }' +
             '.ec-ban-warning { display:none; align-items:center; gap:0.5em; padding:0.6em 1em; margin-bottom:0.6em; border-radius:8px; background:rgba(231,76,60,0.1); border:1px solid rgba(231,76,60,0.25); color:#e74c3c; font-size:0.85em; }' +
@@ -488,7 +611,7 @@ define([], function () {
             '.ec-c:hover .ec-delete-btn { opacity:0.2; } .ec-delete-btn:hover { color:#e74c3c; opacity:1; background:rgba(231,76,60,0.08); }' +
             '.ec-delete-confirm { display:none; font-size:0.72em; color:#e74c3c; margin-left:auto; align-items:center; gap:4px; } .ec-delete-confirm.ec-active { display:inline-flex; }' +
             '.ec-delete-confirm-btn { background:none; border:none; color:#e74c3c; cursor:pointer; font-family:inherit; font-size:1em; font-weight:600; padding:0; text-decoration:underline; }' +
-            '.ec-show-more { background:none; border:none; color:var(--theme-accent-text-color, #00a4dc); cursor:pointer; font-size:0.75em; font-family:inherit; padding:0.4em 0 0.4em 3.6em; opacity:0.8; transition:opacity 0.15s; } .ec-show-more:hover { opacity:1; text-decoration:underline; }' +
+            '.ec-show-more { background:none; border:none; color:var(--theme-accent-text-color, #00a4dc); cursor:pointer; font-size:0.75em; font-family:inherit; padding:0.4em 0.5em; opacity:0.8; transition:opacity 0.15s; width:fit-content; align-self:center; } .ec-show-more:hover { opacity:1; text-decoration:underline; }' +
             '.ec-reply-inline { display:none; padding:0.3em 0.4em 0.3em 3.6em; } .ec-reply-inline.open { display:flex; gap:0.4em; align-items:flex-start; }' +            '.ec-reply-main { display:flex; flex-direction:column; gap:0.22em; flex:1; min-width:0; }' +
             '.ec-reply-inline .ec-textarea { min-height:46px; height:46px; font-size:0.8em; line-height:1.35; padding:0.4em 0.6em; flex:none; border-radius:6px; overflow-y:hidden; resize:none; box-sizing:border-box; }' +            '.ec-reply-char-count { font-size:0.72em; opacity:0.3; text-align:right; padding-right:2px; line-height:1; }' +
             '.ec-reply-char-count.ec-over { color:#e74c3c; opacity:1; }' +
@@ -502,6 +625,15 @@ define([], function () {
             '.ec-error { color:#ff4444; padding:0.5em; background:rgba(255,0,0,0.08); border-radius:6px; margin-bottom:0.5em; display:none; font-size:0.8em; }' +
             '.ec-loading { text-align:center; padding:0.8em 0; opacity:0.2; font-size:0.8em; }' +
             '@keyframes ec-shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }' +
+            '@keyframes ec-slide-in { from { opacity:0; transform:translateY(-8px); } to { opacity:1; transform:translateY(0); } }' +
+            '.ec-inserting { animation:ec-slide-in 0.3s ease-out; } .ec-inserting.ec-awaiting { animation:ec-slide-in 0.3s ease-out; opacity:0.5; }' +
+            '.ec-c.ec-highlight, .ec-c.reply.ec-highlight { background:rgba(46,204,113,0.12) !important; border-left:3px solid rgba(46,204,113,0.6); transition:background 1s ease-out, border-left-color 1s ease-out; }' +
+            '.ec-c.ec-highlight-denied, .ec-c.reply.ec-highlight-denied { background:rgba(231,76,60,0.12) !important; border-left:3px solid rgba(231,76,60,0.6); transition:background 1s ease-out, border-left-color 1s ease-out; }' +
+            '.ec-c.ec-highlight-fade { background:transparent !important; border-left-color:transparent !important; }' +
+            '.ec-repositioning { box-shadow:0 2px 12px rgba(0,0,0,0.15); z-index:1; position:relative; }' +
+            '.ec-show-more { position:relative; overflow:visible; } .ec-new-chip { position:absolute; top:-4px; right:-12px; width:10px; height:10px; background:#2ecc71; border-radius:50%; pointer-events:none; box-shadow:0 0 4px rgba(46,204,113,0.6); }' +
+            '@keyframes ec-fade-into { from { opacity:1; transform:translateY(0); } to { opacity:0; transform:translateY(8px); } }' +
+            '.ec-fading-into { animation:ec-fade-into 0.8s ease-in forwards; pointer-events:none; }' +
             '.ec-skel { display:flex; gap:0.7em; padding:0.7em 0.8em; border-radius:8px; background:color-mix(in srgb, currentColor 5%, transparent); border:1px solid color-mix(in srgb, currentColor 6%, transparent); }' +
             '.ec-skel-bone { border-radius:4px; background:linear-gradient(90deg, color-mix(in srgb, currentColor 6%, transparent) 25%, color-mix(in srgb, currentColor 10%, transparent) 50%, color-mix(in srgb, currentColor 6%, transparent) 75%); background-size:200% 100%; animation:ec-shimmer 1.5s ease-in-out infinite; }' +
             '.ec-skel-avatar { width:32px; height:32px; border-radius:50%; flex-shrink:0; }' +
@@ -514,7 +646,7 @@ define([], function () {
             '.ec-toolbar-btn { background:color-mix(in srgb, currentColor 5%, transparent); border:1px solid color-mix(in srgb, currentColor 8%, transparent); border-radius:6px; color:inherit; font-size:0.72em; font-family:inherit; padding:0.3em 0.5em; cursor:pointer; opacity:0.7; transition:all 0.15s; line-height:1.4; text-align:left; white-space:nowrap; }' +
             '.ec-toolbar-btn:hover { opacity:0.9; background:color-mix(in srgb, currentColor 8%, transparent); }' +
             '.ec-drop-wrap { position:relative; }' +
-            '.ec-dropdown { display:none; position:absolute; top:calc(100% + 4px); left:0; min-width:100%; background:color-mix(in srgb, currentColor 8%, transparent); backdrop-filter:blur(16px); -webkit-backdrop-filter:blur(16px); border:1px solid color-mix(in srgb, currentColor 10%, transparent); border-radius:8px; padding:4px 0; z-index:1000; box-shadow:0 4px 12px rgba(0,0,0,0.15); max-height:240px; overflow-y:auto; overflow-x:hidden; }' +
+            '.ec-dropdown { display:none; position:fixed; background:color-mix(in srgb, currentColor 8%, transparent); backdrop-filter:blur(16px); -webkit-backdrop-filter:blur(16px); border:1px solid color-mix(in srgb, currentColor 10%, transparent); border-radius:8px; padding:4px 0; z-index:10000; box-shadow:0 4px 12px rgba(0,0,0,0.15); max-height:240px; overflow-y:auto; overflow-x:hidden; }' +
             '.ec-dropdown.open { display:block; }' +
             '.ec-drop-item { display:flex; align-items:center; gap:6px; padding:4px 10px; font-size:0.72em; opacity:0.55; cursor:pointer; white-space:nowrap; transition:background 0.1s; }' +
             '.ec-drop-item:hover { background:color-mix(in srgb, currentColor 5%, transparent); opacity:0.75; }' +
@@ -526,8 +658,9 @@ define([], function () {
             '.ec-censor-btn.active:hover { background:rgba(243,156,18,0.25); }' +
             '</style>' +
             '<h2 class="sectionTitle sectionTitle-cards padded-left padded-left-page padded-right">Community Comments</h2>' +
-            '<div class="ec-content sectionTitle-cards padded-left padded-left-page padded-right">' +
+            '<div class="ec-content ec-loading-state sectionTitle-cards padded-left padded-left-page padded-right">' +
             '<div class="ec-summary" id="ec-summary" style="display:none;"></div>' +
+            '<div class="ec-scope-row" id="ec-scope-row" style="display:none;"></div>' +
             '<div class="ec-error" id="ec-error"></div>' +
             '<div class="ec-name-warning" id="ec-name-warning">' + WARNING_SVG + ' Your display name has been flagged as inappropriate. You cannot post comments or replies until you update your name in the plugin settings.</div>' +
             '<div class="ec-ban-warning" id="ec-ban-warning"></div>' +
@@ -609,14 +742,19 @@ define([], function () {
                 body: JSON.stringify({ MediaKey: currentMediaKey, MediaTitle: item.Name || '', UserUuid: userUuid, Body: body, StarRating: selectedRating > 0 ? selectedRating : null, ParentCommentId: null, IsSpoiler: isSpoiler, StarOnly: starOnly })
             }).then(function (r) { return r.json(); }).then(function (data) {
                 if (data.banned) {
-                    banInfo = { banType: data.banType, reason: data.banReason, expiresAt: data.banExpiresAt };
+                    banInfo = { banType: data.banType, reason: data.banReason, expiresAt: data.banExpiresAt, isAdmin: data.isAdmin || false };
                     updateFormVisibility(section);
+                    var bToggles = section.querySelectorAll('.ec-reply-toggle');
+                    for (var bi = 0; bi < bToggles.length; bi++) bToggles[bi].style.display = 'none';
+                    var bReplies = section.querySelectorAll('.ec-reply-inline.open');
+                    for (var bj = 0; bj < bReplies.length; bj++) bReplies[bj].classList.remove('open');
                     return;
                 }
                 if (data.nameFlagged) {
                     showError(section, 'Your display name has been flagged as inappropriate. Update your name in plugin settings to post comments and replies.');
                     return;
                 }
+                var postedRating = selectedRating > 0 ? selectedRating : null;
                 textarea.value = '';
                 counter.textContent = '0 / ' + MAX_CHARS;
                 counter.classList.remove('ec-over');
@@ -626,10 +764,29 @@ define([], function () {
                 section.querySelectorAll('#ec-stars span').forEach(function (s) { s.classList.remove('active'); });
                 section.querySelector('#ec-form').classList.remove('open');
                 section.querySelector('#ec-form-toggle').style.display = 'block';
-                currentPage = 0;
                 hasPendingActivity = true;
-                loadComments(section, true);
-                if (!starOnly) startModerationPoll(section);
+
+                if (starOnly) {
+                    currentPage = 0;
+                    loadComments(section, true);
+                } else {
+                    var pendingComment = {
+                        CommentId: data.CommentId,
+                        AuthorDisplayName: displayName,
+                        Body: body,
+                        CreatedAt: new Date().toISOString(),
+                        ModerationStatus: 'awaiting',
+                        ParentCommentId: null,
+                        StarRating: postedRating,
+                        AvatarBlob: userAvatarBlob
+                    };
+                    pendingComments.push(pendingComment);
+                    var list = section.querySelector('#ec-list');
+                    var empty = list.querySelector('.ec-empty');
+                    if (empty) empty.remove();
+                    var pendingEl = createPendingCommentEl(pendingComment, false);
+                    insertWithAnimation(list, pendingEl, list.firstChild);
+                }
             }).catch(function (err) { showError(section, 'Failed to post: ' + err.message); });
         });
     }
@@ -714,6 +871,7 @@ define([], function () {
                     if (idx !== -1) languageFilter.splice(idx, 1);
                 }
                 updateLangBtnLabel(langBtn);
+                showOverallRatings = false;
                 currentPage = 0;
                 saveUserSettings({ LanguageFilter: languageFilter });
                 loadComments(section, true);
@@ -723,27 +881,87 @@ define([], function () {
             langDropdown.appendChild(item);
         });
 
+        var sortWrap = sortBtn.parentElement;
+        var langWrap = langBtn.parentElement;
+
+        var activeDropdown = null;
+        var activeBtn = null;
+        var scrollRaf = null;
+
+        function positionDropdown() {
+            if (!activeDropdown || !activeBtn) return;
+            var rect = activeBtn.getBoundingClientRect();
+            activeDropdown.style.top = (rect.bottom + 4) + 'px';
+            activeDropdown.style.left = rect.left + 'px';
+            activeDropdown.style.minWidth = rect.width + 'px';
+        }
+
+        function onScrollReposition() {
+            if (!scrollRaf) {
+                scrollRaf = requestAnimationFrame(function () {
+                    scrollRaf = null;
+                    positionDropdown();
+                });
+            }
+        }
+
+        var resizeObs = new ResizeObserver(function () {
+            if (activeDropdown) positionDropdown();
+        });
+
+        function openDropdown(dropdown, btn) {
+            document.body.appendChild(dropdown);
+            dropdown.classList.add('open');
+            activeDropdown = dropdown;
+            activeBtn = btn;
+            positionDropdown();
+            window.addEventListener('scroll', onScrollReposition, true);
+            resizeObs.observe(section);
+        }
+
+        function closeDropdown(dropdown, wrap) {
+            if (activeDropdown === dropdown) {
+                window.removeEventListener('scroll', onScrollReposition, true);
+                resizeObs.disconnect();
+                activeDropdown = null;
+                activeBtn = null;
+            }
+            dropdown.classList.remove('open');
+            dropdown.style.top = '';
+            dropdown.style.left = '';
+            dropdown.style.minWidth = '';
+            if (dropdown.parentElement !== wrap) wrap.appendChild(dropdown);
+        }
+
         // Toggle sort dropdown
         sortBtn.addEventListener('click', function (e) {
             e.stopPropagation();
-            langDropdown.classList.remove('open');
-            sortDropdown.classList.toggle('open');
+            closeDropdown(langDropdown, langWrap);
+            if (sortDropdown.classList.contains('open')) {
+                closeDropdown(sortDropdown, sortWrap);
+            } else {
+                openDropdown(sortDropdown, sortBtn);
+            }
         });
 
         // Toggle language dropdown
         langBtn.addEventListener('click', function (e) {
             e.stopPropagation();
-            sortDropdown.classList.remove('open');
-            langDropdown.classList.toggle('open');
+            closeDropdown(sortDropdown, sortWrap);
+            if (langDropdown.classList.contains('open')) {
+                closeDropdown(langDropdown, langWrap);
+            } else {
+                openDropdown(langDropdown, langBtn);
+            }
         });
 
         // Close all dropdowns when clicking outside
         document.addEventListener('click', function (e) {
             if (!sortDropdown.contains(e.target) && e.target !== sortBtn) {
-                sortDropdown.classList.remove('open');
+                closeDropdown(sortDropdown, sortWrap);
             }
             if (!langDropdown.contains(e.target) && e.target !== langBtn) {
-                langDropdown.classList.remove('open');
+                closeDropdown(langDropdown, langWrap);
             }
         });
 
@@ -810,13 +1028,22 @@ define([], function () {
     function loadComments(section, bustCache) {
         if (!currentMediaKey || !apiEndpoint || isLoading) return;
         isLoading = true;
+        var content = section.querySelector('.ec-content');
+        if (content) content.classList.add('ec-loading-state');
         var list = section.querySelector('#ec-list'), scroll = section.querySelector('#ec-scroll');
         var hasExisting = list.children.length > 0 && !list.querySelector('.ec-skel');
         if (hasExisting) list.classList.add('ec-fading'); else list.innerHTML = buildSkeletons(5);
 
         var url = apiEndpoint + '/comments?mediaKey=' + encodeURIComponent(currentMediaKey) + '&limit=' + PAGE_SIZE + '&offset=' + (currentPage * PAGE_SIZE) + '&sort=' + currentSort;
         if (serverLocalOnly && serverGuid) url += '&serverGuid=' + encodeURIComponent(serverGuid);
-        if (languageFilter.length > 0) url += '&language=' + encodeURIComponent(languageFilter.join(','));
+        if (languageFilter.length > 0) {
+            var expanded = [];
+            languageFilter.forEach(function (lang) {
+                expanded.push(lang);
+                if (LANG_ENGLISH_MAP[lang]) expanded.push(LANG_ENGLISH_MAP[lang]);
+            });
+            url += '&language=' + encodeURIComponent(expanded.join(','));
+        }
         if (bustCache) url += '&_t=' + Date.now();
 
         // Only refetch pending if user has posted something this session
@@ -828,6 +1055,8 @@ define([], function () {
         ]).then(function (results) {
             var data = results[0];
             commentTotal = data.total; isLoading = false; list.classList.remove('ec-fading'); list.innerHTML = '';
+            var content = section.querySelector('.ec-content');
+            if (content) content.classList.remove('ec-loading-state');
 
             // Render pending comments at the top (only on first page)
             if (currentPage === 0 && pendingComments.length > 0) {
@@ -839,7 +1068,7 @@ define([], function () {
                     });
             }
 
-            if (data.summary) renderSummary(section, data.summary, data.total);
+            renderSummary(section, data.summary, data.overallSummary, data.total, data.overallTotal);
 
             if (data.comments.length === 0 && pendingComments.length === 0) {
                 list.innerHTML = '<div class="ec-empty">No comments in this view. Try adjusting your filters.</div>';
@@ -848,7 +1077,12 @@ define([], function () {
 
             data.comments.forEach(function (c) { appendComment(section, list, c); });
             scroll.scrollTop = 0; updatePager(section);
-        }).catch(function (err) { isLoading = false; list.classList.remove('ec-fading'); showError(section, 'Failed to load: ' + err.message); });
+        }).catch(function (err) {
+            isLoading = false; list.classList.remove('ec-fading');
+            var content = section.querySelector('.ec-content');
+            if (content) content.classList.remove('ec-loading-state');
+            showError(section, 'Failed to load: ' + err.message);
+        });
     }
 
     function createPendingCommentEl(c, isReply) {
@@ -884,6 +1118,274 @@ define([], function () {
 
         return div;
     }
+
+    function highlightWhenVisible(el, scroll, isDenied) {
+        var cls = isDenied ? 'ec-highlight-denied' : 'ec-highlight';
+        var elapsed = 0;
+        var started = false;
+        var enterTime = 0;
+        var done = false;
+        var observer = new IntersectionObserver(function (entries) {
+            if (done) return;
+            var entry = entries[0];
+            if (entry.isIntersecting) {
+                if (!started) {
+                    el.classList.add(cls);
+                    started = true;
+                }
+                enterTime = Date.now();
+            } else if (started && enterTime > 0) {
+                elapsed += Date.now() - enterTime;
+                enterTime = 0;
+                if (elapsed >= 5000) {
+                    done = true;
+                    observer.disconnect();
+                    el.classList.add('ec-highlight-fade');
+                    setTimeout(function () {
+                        el.classList.remove(cls, 'ec-highlight-fade');
+                    }, 1200);
+                }
+            }
+        }, { root: scroll, threshold: 0.5 });
+        observer.observe(el);
+        // Also check periodically while in view to trigger fade
+        var checkInterval = setInterval(function () {
+            if (done) { clearInterval(checkInterval); return; }
+            if (enterTime > 0) {
+                var total = elapsed + (Date.now() - enterTime);
+                if (total >= 5000) {
+                    done = true;
+                    clearInterval(checkInterval);
+                    observer.disconnect();
+                    el.classList.add('ec-highlight-fade');
+                    setTimeout(function () {
+                        el.classList.remove(cls, 'ec-highlight-fade');
+                    }, 1200);
+                }
+            }
+        }, 1000);
+    }
+
+    function getReplyBlock(list, parentCommentId) {
+        var rf = list.querySelector('#ec-rf-' + parentCommentId);
+        var replies = [];
+        var moreBtn = null;
+        if (!rf) return { replies: replies, moreBtn: null, afterBlock: null };
+        var sib = rf.nextElementSibling;
+        while (sib) {
+            if (sib.classList.contains('ec-c') && !sib.classList.contains('reply')) break;
+            if (sib.classList.contains('ec-show-more')) { moreBtn = sib; }
+            else if (sib.classList.contains('ec-c') && sib.classList.contains('reply') && !sib.classList.contains('ec-awaiting')) {
+                replies.push(sib);
+            }
+            sib = sib.nextElementSibling;
+        }
+        return { replies: replies, moreBtn: moreBtn, afterBlock: sib };
+    }
+
+    function findSortInsertionPoint(list, commentObj) {
+        var items = list.querySelectorAll('.ec-c:not(.reply):not(.ec-denied):not(.ec-awaiting)');
+        for (var i = 0; i < items.length; i++) {
+            var c = items[i];
+            if (currentSort === 'newest') return c;
+            if (currentSort === 'oldest') continue;
+            if (currentSort === 'best' && commentObj.StarRating) {
+                var rating = parseInt((c.querySelector('.ec-c-rating') || {}).textContent || '0') || 0;
+                if (commentObj.StarRating >= rating) return c;
+            }
+            if (currentSort === 'worst' && commentObj.StarRating) {
+                var rating = parseInt((c.querySelector('.ec-c-rating') || {}).textContent || '0') || 0;
+                if (commentObj.StarRating <= rating) return c;
+            }
+        }
+        return null;
+    }
+
+    function insertWithAnimation(list, el, referenceNode) {
+        el.classList.add('ec-inserting');
+        list.insertBefore(el, referenceNode || null);
+        el.addEventListener('animationend', function handler() {
+            el.classList.remove('ec-inserting');
+            el.removeEventListener('animationend', handler);
+        });
+    }
+
+    function repositionElement(el, list, refNode, scroll) {
+        if (el.nextSibling === refNode) return;
+
+        var elRect = el.getBoundingClientRect();
+        var scrollRect = scroll.getBoundingClientRect();
+        var isVisible = elRect.top < scrollRect.bottom && elRect.bottom > scrollRect.top;
+
+        if (!isVisible) {
+            list.insertBefore(el, refNode || null);
+            return;
+        }
+
+        // Delay so the user sees the approved state before it moves
+        setTimeout(function () {
+            var first = el.getBoundingClientRect();
+            el.classList.add('ec-repositioning');
+            list.insertBefore(el, refNode || null);
+            var last = el.getBoundingClientRect();
+            var deltaY = first.top - last.top;
+            if (Math.abs(deltaY) < 2) {
+                el.classList.remove('ec-repositioning');
+                return;
+            }
+
+            el.style.transform = 'translateY(' + deltaY + 'px)';
+            el.style.transition = 'none';
+            el.offsetHeight;
+            el.style.transition = 'transform 2.5s cubic-bezier(0.22, 0.61, 0.36, 1)';
+            el.style.transform = '';
+            el.addEventListener('transitionend', function handler(e) {
+                if (e.propertyName !== 'transform') return;
+                el.style.transition = '';
+                el.classList.remove('ec-repositioning');
+                el.removeEventListener('transitionend', handler);
+            });
+        }, 1000);
+    }
+
+    function repositionReply(el, list, parentCommentId, scroll) {
+        var block = getReplyBlock(list, parentCommentId);
+        var moreBtn = block.moreBtn;
+        var visibleReplies = block.replies;
+        // Check if show-more is expanded (button was removed by loadRemainingReplies)
+        var isExpanded = !moreBtn;
+
+        // Determine target position based on sort
+        var targetRefNode;
+        if (currentSort === 'newest') {
+            // Newest: new reply goes first among visible replies
+            var rf = list.querySelector('#ec-rf-' + parentCommentId);
+            targetRefNode = visibleReplies.length > 0 ? visibleReplies[0] : (rf ? rf.nextElementSibling : block.afterBlock);
+        } else {
+            // Oldest and other sorts: new reply goes at the end
+            targetRefNode = moreBtn || block.afterBlock;
+        }
+
+        if (el.nextSibling === targetRefNode) return;
+
+        var elRect = el.getBoundingClientRect();
+        var scrollRect = scroll.getBoundingClientRect();
+        var isVisible = elRect.top < scrollRect.bottom && elRect.bottom > scrollRect.top;
+
+        if (isExpanded || !moreBtn) {
+            // Show-more expanded or doesn't exist — normal reposition
+            if (!isVisible) {
+                list.insertBefore(el, targetRefNode || null);
+                return;
+            }
+            setTimeout(function () {
+                var first = el.getBoundingClientRect();
+                el.classList.add('ec-repositioning');
+                list.insertBefore(el, targetRefNode || null);
+                var last = el.getBoundingClientRect();
+                var deltaY = first.top - last.top;
+                if (Math.abs(deltaY) < 2) { el.classList.remove('ec-repositioning'); return; }
+                el.style.transform = 'translateY(' + deltaY + 'px)';
+                el.style.transition = 'none';
+                el.offsetHeight;
+                el.style.transition = 'transform 2.5s cubic-bezier(0.22, 0.61, 0.36, 1)';
+                el.style.transform = '';
+                el.addEventListener('transitionend', function handler(e) {
+                    if (e.propertyName !== 'transform') return;
+                    el.style.transition = '';
+                    el.classList.remove('ec-repositioning');
+                    el.removeEventListener('transitionend', handler);
+                });
+            }, 1000);
+            return;
+        }
+
+        // Show-more exists and is collapsed — determine if reply belongs in visible or hidden section
+        var belongsInVisible;
+        if (currentSort === 'newest') {
+            // Newest: new reply is newest, so it belongs at the top of visible
+            belongsInVisible = true;
+        } else if (currentSort === 'oldest') {
+            // Oldest: new reply is newest, so it goes after all older ones — into the hidden section
+            belongsInVisible = false;
+        } else {
+            // Other sorts (rating, popular, etc.): new reply has no metrics, goes to end — hidden
+            belongsInVisible = false;
+        }
+
+        if (belongsInVisible) {
+            // Reply belongs in the visible section
+            // Bump the last visible reply past the show-more (into the hidden section)
+            setTimeout(function () {
+                if (visibleReplies.length > 0) {
+                    var lastVisible = visibleReplies[visibleReplies.length - 1];
+                    // Remove last visible reply from DOM — it'll be re-fetched via show-more
+                    lastVisible.remove();
+                    // Update show-more count text
+                    var count = parseInt(moreBtn.textContent.match(/\d+/)) || 0;
+                    count++;
+                    var moreTxt = 'Show ' + count + ' more ' + (count === 1 ? 'reply' : 'replies');
+                    // Preserve chip if present
+                    var existingChip = moreBtn.querySelector('.ec-new-chip');
+                    moreBtn.textContent = moreTxt;
+                    if (existingChip) moreBtn.appendChild(existingChip);
+                }
+
+                // Now reposition the new reply to its target
+                var first = el.getBoundingClientRect();
+                el.classList.add('ec-repositioning');
+                list.insertBefore(el, targetRefNode || null);
+                var last = el.getBoundingClientRect();
+                var deltaY = first.top - last.top;
+                if (Math.abs(deltaY) < 2) { el.classList.remove('ec-repositioning'); return; }
+                el.style.transform = 'translateY(' + deltaY + 'px)';
+                el.style.transition = 'none';
+                el.offsetHeight;
+                el.style.transition = 'transform 2.5s cubic-bezier(0.22, 0.61, 0.36, 1)';
+                el.style.transform = '';
+                el.addEventListener('transitionend', function handler(e) {
+                    if (e.propertyName !== 'transform') return;
+                    el.style.transition = '';
+                    el.classList.remove('ec-repositioning');
+                    el.removeEventListener('transitionend', handler);
+                });
+            }, 1000);
+        } else {
+            // Reply belongs in the hidden/show-more section — animate into the button
+            setTimeout(function () {
+                if (!isVisible) {
+                    el.remove();
+                } else {
+                    // Animate the reply fading down into the show-more button
+                    el.classList.add('ec-fading-into');
+                    el.addEventListener('animationend', function () {
+                        el.remove();
+                    });
+                }
+                // Track this reply ID for highlighting when expanded
+                var ids = (moreBtn.dataset.highlightIds || '').split(',').filter(Boolean);
+                if (el.dataset.commentId && ids.indexOf(el.dataset.commentId) === -1) {
+                    ids.push(el.dataset.commentId);
+                }
+                moreBtn.dataset.highlightIds = ids.join(',');
+                // Update show-more count (preserve chip)
+                var count = parseInt(moreBtn.textContent.match(/\d+/)) || 0;
+                count++;
+                var moreTxt = 'Show ' + count + ' more ' + (count === 1 ? 'reply' : 'replies');
+                var existingChip = moreBtn.querySelector('.ec-new-chip');
+                moreBtn.textContent = moreTxt;
+                // Add green dot chip (stays until expanded)
+                if (existingChip) {
+                    moreBtn.appendChild(existingChip);
+                } else {
+                    var chip = document.createElement('span');
+                    chip.className = 'ec-new-chip';
+                    moreBtn.appendChild(chip);
+                }
+            }, 1000);
+        }
+    }
+
     function buildDecimalStars(avg, outOf) {
         var html = '';
         for (var i = 1; i <= outOf; i++) {
@@ -909,15 +1411,69 @@ define([], function () {
         return '<svg width="' + w + '" height="' + h + '" viewBox="0 0 ' + w + ' ' + h + '" xmlns="http://www.w3.org/2000/svg">' + bars + '</svg>';
     }
 
-    function renderSummary(section, summary, total) {
+    var cachedFilteredSummary = null;
+    var cachedOverallSummary = null;
+    var cachedTotal = 0;
+    var cachedOverallTotal = null;
+
+    function renderSummary(section, filteredSummary, overallSummary, total, overallTotal) {
         var el = section.querySelector('#ec-summary');
-        if (!summary || !summary.avg) { el.style.display = 'none'; return; }
-        var spark = buildSparkline(summary.distribution || {});
-        el.innerHTML = '<div class="ec-avg"><span class="ec-avg-num">' + summary.avg.toFixed(1) + '</span><span class="ec-avg-max">/10</span></div>' +
-            '<div class="ec-avg-detail"><div class="ec-avg-stars">' + buildDecimalStars(summary.avg, 10) + '</div>' +
-            '<div class="ec-avg-meta">' + (summary.ratedCount || 0) + ' ratings \u00B7 ' + total + ' comments</div></div>' +
+        cachedFilteredSummary = filteredSummary;
+        cachedOverallSummary = overallSummary;
+        cachedTotal = total;
+        if (overallTotal !== undefined) cachedOverallTotal = overallTotal;
+
+        var hasLangFilter = languageFilter.length > 0;
+        var active = (hasLangFilter && showOverallRatings) ? overallSummary : filteredSummary;
+
+        var scopeRow = section.querySelector('#ec-scope-row');
+
+        function buildScopePill() {
+            return '<div class="ec-scope-pill">' +
+                '<button class="ec-scope-opt' + (showOverallRatings ? ' active' : '') + '" data-scope="overall" title="Ratings from all languages">Overall</button>' +
+                '<button class="ec-scope-opt' + (!showOverallRatings ? ' active' : '') + '" data-scope="filtered" title="Ratings from selected languages only">Filtered</button>' +
+                '</div>';
+        }
+
+        function renderScopeRow() {
+            if (hasLangFilter && overallSummary) {
+                scopeRow.innerHTML = buildScopePill();
+                scopeRow.style.display = '';
+                scopeRow.querySelectorAll('.ec-scope-opt').forEach(function (opt) {
+                    opt.addEventListener('click', function () {
+                        showOverallRatings = opt.dataset.scope === 'overall';
+                        renderSummary(section, cachedFilteredSummary, cachedOverallSummary, cachedTotal, cachedOverallTotal);
+                    });
+                });
+            } else {
+                scopeRow.innerHTML = '';
+                scopeRow.style.display = 'none';
+            }
+        }
+
+        // No ratings for active view
+        if (!active || !active.avg) {
+            if (hasLangFilter && overallSummary && overallSummary.avg) {
+                el.innerHTML = '<div class="ec-no-ratings">No ratings for selected language' + (languageFilter.length > 1 ? 's' : '') + '</div>';
+                el.style.display = 'flex';
+                renderScopeRow();
+                return;
+            }
+            el.innerHTML = '';
+            el.style.display = 'none';
+            scopeRow.innerHTML = '';
+            scopeRow.style.display = 'none';
+            return;
+        }
+
+        var spark = buildSparkline(active.distribution || {});
+
+        el.innerHTML = '<div class="ec-avg"><span class="ec-avg-num">' + active.avg.toFixed(1) + '</span><span class="ec-avg-max">/10</span></div>' +
+            '<div class="ec-avg-detail"><div class="ec-avg-stars">' + buildDecimalStars(active.avg, 10) + '</div>' +
+            '<div class="ec-avg-meta">' + (active.ratedCount || 0) + ' ratings \u00B7 ' + ((hasLangFilter && showOverallRatings && cachedOverallTotal != null) ? cachedOverallTotal : total) + ' comments</div></div>' +
             (spark ? '<div class="ec-spark">' + spark + '</div>' : '');
         el.style.display = 'flex';
+        renderScopeRow();
     }
 
     function autoGrowTextarea(textarea) {
@@ -950,19 +1506,9 @@ define([], function () {
                 return c.ParentCommentId === comment.CommentId;
             });
 
-            (comment.Replies || []).forEach(function (r) {
-                var re = createCommentEl(r, true);
-                list.appendChild(re);
-                wireActions(section, list, re, r, true);
-            });
-
-            pendingReplies.forEach(function (r) {
-                var re = createPendingCommentEl(r, true);
-                list.appendChild(re);
-            });
-
+            var replyForm = null;
             if (userModerationStatus !== 'denied') {
-                var replyForm = document.createElement('div');
+                replyForm = document.createElement('div');
                 replyForm.className = 'ec-reply-inline';
                 replyForm.id = 'ec-rf-' + comment.CommentId;
                 replyForm.innerHTML =
@@ -975,6 +1521,20 @@ define([], function () {
                     '<button class="ec-reply-cancel" data-id="' + comment.CommentId + '" type="button">Cancel</button>' +
                     '</div>';
                 list.appendChild(replyForm);
+            }
+
+            (comment.Replies || []).forEach(function (r) {
+                var re = createCommentEl(r, true);
+                list.appendChild(re);
+                wireActions(section, list, re, r, true);
+            });
+
+            pendingReplies.forEach(function (r) {
+                var re = createPendingCommentEl(r, true);
+                list.appendChild(re);
+            });
+
+            if (replyForm) {
 
                 var replyTextarea = replyForm.querySelector('#ec-rt-' + comment.CommentId);
                 var replyCounter = replyForm.querySelector('#ec-rc-' + comment.CommentId);
@@ -1040,8 +1600,12 @@ define([], function () {
                             })
                         }).then(function (r) { return r.json(); }).then(function (data) {
                             if (data.banned) {
-                                banInfo = { banType: data.banType, reason: data.banReason, expiresAt: data.banExpiresAt };
+                                banInfo = { banType: data.banType, reason: data.banReason, expiresAt: data.banExpiresAt, isAdmin: data.isAdmin || false };
                                 updateFormVisibility(section);
+                                var bToggles = section.querySelectorAll('.ec-reply-toggle');
+                                for (var bi = 0; bi < bToggles.length; bi++) bToggles[bi].style.display = 'none';
+                                var bReplies = section.querySelectorAll('.ec-reply-inline.open');
+                                for (var bj = 0; bj < bReplies.length; bj++) bReplies[bj].classList.remove('open');
                                 return;
                             }
                             if (data.nameFlagged) {
@@ -1070,7 +1634,6 @@ define([], function () {
                             }
 
                             hasPendingActivity = true;
-                            startModerationPoll(section);
                         }).catch(function (err) {
                             showError(section, 'Failed to post reply: ' + err.message);
                         });
@@ -1418,12 +1981,21 @@ define([], function () {
     }
 
     function loadRemainingReplies(section, list, parentId, moreBtn, skipCount) {
+        var highlightIds = (moreBtn.dataset.highlightIds || '').split(',').filter(Boolean);
         moreBtn.textContent = 'Loading...'; moreBtn.disabled = true;
-        var repliesUrl = apiEndpoint + '/replies?parentId=' + encodeURIComponent(parentId) + '&offset=' + skipCount;
+        var repliesUrl = apiEndpoint + '/replies?parentId=' + encodeURIComponent(parentId) + '&offset=' + skipCount + '&sort=' + encodeURIComponent(currentSort);
         if (serverLocalOnly && serverGuid) repliesUrl += '&serverGuid=' + encodeURIComponent(serverGuid);
         cfFetch(repliesUrl)
             .then(function (r) { return r.json(); }).then(function (replies) {
-                replies.forEach(function (r) { var re = createCommentEl(r, true); list.insertBefore(re, moreBtn); wireActions(section, list, re, r, true); });
+                var scroll = section.querySelector('#ec-scroll');
+                replies.forEach(function (r) {
+                    var re = createCommentEl(r, true);
+                    list.insertBefore(re, moreBtn);
+                    wireActions(section, list, re, r, true);
+                    if (scroll && highlightIds.indexOf(r.CommentId) !== -1) {
+                        highlightWhenVisible(re, scroll, false);
+                    }
+                });
                 moreBtn.remove();
             }).catch(function () { moreBtn.textContent = 'Failed. Try again.'; moreBtn.disabled = false; });
     }
