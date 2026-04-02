@@ -1101,10 +1101,11 @@ define([], function () {
                 (c.StarRating ? '<span class="ec-c-rating">\u2605 ' + c.StarRating + '/10</span>' : '') +
                 '<span class="ec-c-date">' + formatDate(c.CreatedAt) + '</span></div>' +
                 '<div class="ec-denied-body">' + WARNING_SVG + ' Comment denied</div>' +
-                '<div class="ec-denied-reason">' + esc(c.DenialReason || 'Did not meet community guidelines') + '</div>' +
-                '<div style="margin-top:0.5rem;text-align:right">' +
+                '<div style="display:flex;align-items:center;gap:0.5rem;margin-top:0.2rem">' +
+                '<span class="ec-denied-reason" style="flex:1;margin-top:0">' + esc(c.DenialReason || 'Did not meet community guidelines') + '</span>' +
                 '<button class="ec-dismiss-denial" data-id="' + esc(c.CommentId) + '" ' +
-                'style="background:none;border:1px solid rgba(231,76,60,0.4);border-radius:4px;color:rgba(231,76,60,0.7);cursor:pointer;font-size:0.75rem;padding:0.2rem 0.5rem">Dismiss</button>' +
+                'title="Remove this notification from your feed" ' +
+                'style="background:none;border:1px solid rgba(231,76,60,0.4);border-radius:4px;color:rgba(231,76,60,0.7);cursor:pointer;font-size:0.72rem;padding:0.15rem 0.4rem;white-space:nowrap;flex-shrink:0">\u00d7 Dismiss</button>' +
                 '</div>' +
                 '</div>';
             var dismissBtn = div.querySelector('.ec-dismiss-denial');
@@ -1118,6 +1119,10 @@ define([], function () {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ UserUuid: userUuid })
+                    }).then(function () {
+                        // Reload so an admin-approved reversal becomes visible in the main feed
+                        var sec = card ? card.closest('.ec-section') : null;
+                        if (sec) loadComments(sec, true);
                     }).catch(function () {});
                 });
             }
