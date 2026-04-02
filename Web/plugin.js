@@ -1102,7 +1102,25 @@ define([], function () {
                 '<span class="ec-c-date">' + formatDate(c.CreatedAt) + '</span></div>' +
                 '<div class="ec-denied-body">' + WARNING_SVG + ' Comment denied</div>' +
                 '<div class="ec-denied-reason">' + esc(c.DenialReason || 'Did not meet community guidelines') + '</div>' +
+                '<div style="margin-top:0.5rem;text-align:right">' +
+                '<button class="ec-dismiss-denial" data-id="' + esc(c.CommentId) + '" ' +
+                'style="background:none;border:1px solid rgba(231,76,60,0.4);border-radius:4px;color:rgba(231,76,60,0.7);cursor:pointer;font-size:0.75rem;padding:0.2rem 0.5rem">Dismiss</button>' +
+                '</div>' +
                 '</div>';
+            var dismissBtn = div.querySelector('.ec-dismiss-denial');
+            if (dismissBtn) {
+                dismissBtn.addEventListener('click', function () {
+                    var commentId = this.dataset.id;
+                    var card = this.closest('.ec-c');
+                    if (card) card.remove();
+                    pendingComments = pendingComments.filter(function (p) { return p.CommentId !== commentId; });
+                    cfFetch(apiEndpoint + '/dismiss/' + encodeURIComponent(commentId), {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ UserUuid: userUuid })
+                    }).catch(function () {});
+                });
+            }
         } else {
             div.classList.add('ec-awaiting');
             div.innerHTML =
