@@ -400,7 +400,33 @@ define([], function () {
         for (var i = 0; i < pendingComments.length; i++) {
             if (pendingComments[i].CommentId === commentId) { pendingIdx = i; break; }
         }
-        if (pendingIdx === -1) return;
+        if (pendingIdx === -1) {
+            var list0 = section.querySelector('#ec-list');
+            var el0 = list0 ? list0.querySelector('.ec-c[data-comment-id="' + commentId + '"]') : null;
+            if (msg.status === 'denied' && el0) {
+                // Admin denied an approved comment visible in the main feed.
+                // Fetch the now-pending data and transition the element in-place.
+                fetchMyPending().then(function () {
+                    var fresh = null;
+                    for (var i = 0; i < pendingComments.length; i++) {
+                        if (pendingComments[i].CommentId === commentId) { fresh = pendingComments[i]; break; }
+                    }
+                    if (!fresh) return;
+                    var freshEl = list0 ? list0.querySelector('.ec-c[data-comment-id="' + commentId + '"]') : null;
+                    if (!freshEl) return;
+                    if (msg.denialReason) fresh.DenialReason = msg.denialReason;
+                    transitionToDenied(freshEl, fresh);
+                    var deniedEl = list0.querySelector('.ec-c[data-comment-id="' + commentId + '"]');
+                    var scroll0 = section.querySelector('#ec-scroll');
+                    if (deniedEl && scroll0) highlightWhenVisible(deniedEl, scroll0, true);
+                });
+            } else if (!el0 && msg.status === 'approved') {
+                // Admin approved a previously dismissed comment — reload to surface it.
+                loadComments(section, true);
+            }
+            // Cross-media push or element already gone: no action needed.
+            return;
+        }
 
         var pending = pendingComments[pendingIdx];
         var list = section.querySelector('#ec-list');
