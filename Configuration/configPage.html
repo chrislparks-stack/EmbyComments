@@ -39,6 +39,22 @@
                     <span>Save All</span>
                 </button>
 
+                <div class="ecActivityFeedSection" style="margin-top: 2em; display: none;">
+                    <h3 style="margin-bottom: 0.5em;">Moderation Activity</h3>
+                    <p style="font-size: 0.85em; color: var(--theme-text-color-secondary, #aaa); margin-bottom: 1em;">
+                        Bans, unbans, AI moderation results, and comments flagged 3+ times.
+                    </p>
+                    <div class="ecActivityFeed" style="border: 1px solid var(--theme-border-color, #333); border-radius: 4px; max-height: 420px; overflow-y: auto;">
+                        <p style="color: var(--theme-text-color-secondary, #aaa); padding: 1em; margin: 0;">Loading activity...</p>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 0.5em;">
+                        <button is="emby-button" class="emby-button btnLoadMoreActivity" style="font-size:0.85em; display:none;">
+                            Load more
+                        </button>
+                        <span class="ecActivityFeedUpdated" style="font-size: 0.75em; color: var(--theme-text-color-secondary, #aaa);"></span>
+                    </div>
+                </div>
+
             </div>
         </form>
     </div>

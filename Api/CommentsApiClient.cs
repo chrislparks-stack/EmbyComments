@@ -48,9 +48,30 @@ namespace EmbyComments.Api
         }
 
         /// <summary>
-        /// Calls /register on the Worker. Sends server credentials for verification.
-        /// Returns raw JSON: { UserUuid, ModerationStatus }
+        /// Calls /server/activity-feed on the Worker with server credentials.
+        /// Returns raw JSON: { events, nextCursor }
         /// </summary>
+        public async Task<string> GetActivityFeedAsync(string cursor = null, int limit = 25)
+        {
+            var url = $"{ApiEndpoint}/server/activity-feed";
+            var payload = new
+            {
+                ServerGuid = ServerGuid,
+                WanAddress = WanAddress,
+                ApiKey = EmbyApiKey,
+                Cursor = cursor ?? string.Empty,
+                Limit = limit
+            };
+            var json = JsonSerializer.Serialize(payload, _jsonOptions);
+            var content = new StringContent(json, Encoding.UTF8, "application/json");
+
+            var response = await _httpClient.PostAsync(url, content);
+            var body = await response.Content.ReadAsStringAsync();
+            if (!response.IsSuccessStatusCode)
+                throw new HttpRequestException($"Worker /server/activity-feed returned {(int)response.StatusCode}: {body}");
+            return body;
+        }
+
         public async Task<string> RegisterNameAsync(string userKey, string displayName, bool checkOnly = false)
         {
             var url = $"{ApiEndpoint}/register";

@@ -26,6 +26,13 @@ namespace EmbyComments.Api
         public bool CheckOnly { get; set; }
     }
 
+    [Route("/embycomments/activity-feed", "GET", Summary = "Get high-priority moderation activity feed (admin only)")]
+    public class GetActivityFeed : IReturn<object>
+    {
+        public string Cursor { get; set; }
+        public int Limit { get; set; }
+    }
+
     public class CommentsService : IService, IRequiresRequest
     {
         private readonly IAuthorizationContext _authContext;
@@ -274,6 +281,30 @@ namespace EmbyComments.Api
 
             // Save config to XML
             Plugin.Instance.SaveConfiguration();
+        }
+
+        /// <summary>
+        /// Proxies to Worker /server/activity-feed using server credentials. Admin only.
+        /// </summary>
+        public async Task<object> Get(GetActivityFeed request)
+        {
+            var authInfo = _authContext.GetAuthorizationInfo(Request);
+            if (authInfo?.User == null || !authInfo.User.Policy.IsAdministrator)
+                return new { error = "Admin access required" };
+
+            var config = Plugin.Instance.Configuration;
+            if (string.IsNullOrEmpty(config.EmbyApiKey) || string.IsNullOrEmpty(config.WanAddress))
+                return new { error = "Plugin is not yet configured. An admin must log in first." };
+
+            try
+            {
+                var json = await Plugin.Instance.ApiClient.GetActivityFeedAsync(request.Cursor, request.Limit > 0 ? request.Limit : 25);
+                return JsonSerializer.Deserialize<ActivityFeedResponse>(json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            }
+            catch (Exception ex)
+            {
+                return new { error = "Failed to fetch activity feed: " + ex.Message };
+            }
         }
 
         private static object DeserializeJson(string json)

@@ -5,6 +5,7 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
     var MAX_NAME_LENGTH = 50;
     var POLL_INTERVAL = 5000;
     var MAX_POLL_ATTEMPTS = 10;
+    var FEED_REFRESH_INTERVAL = 60000;
 
     var SHIELD_SVG = '<svg viewBox="0 0 24 24" width="10" height="10" style="vertical-align:-1px;"><path fill="currentColor" d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-1 17.93C7.05 17.74 5 14.49 5 11V6.3l7-3.11 7 3.11V11c0 3.49-2.05 6.74-6 7.93V18h-1v.93zM10 14.17l-2.59-2.58L6 13l4 4 8-8-1.41-1.42L10 14.17z"/></svg>';
 
@@ -286,6 +287,125 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
         }, POLL_INTERVAL);
     }
 
+    var FEED_LABELS = {
+        'mod.ban.auto':              { icon: '🚫', text: 'Auto-ban' },
+        'admin.ban_user':            { icon: '🔒', text: 'Admin ban' },
+        'admin.unban_user':          { icon: '🔓', text: 'Unbanned' },
+        'moderation.comment_denied': { icon: '❌', text: 'Comment denied' },
+        'moderation.comment_approved': { icon: '✅', text: 'Comment approved' },
+        'comment.report':            { icon: '⚠️', text: 'Report threshold' }
+    };
+
+    function formatFeedTime(iso) {
+        var d = new Date(iso);
+        return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+
+    function renderFeedEvent(ev) {
+        var detail = {};
+        try { detail = JSON.parse(ev.Detail || '{}'); } catch (_) {}
+        var label = FEED_LABELS[ev.Action] || { icon: '•', text: ev.Action };
+
+        // AffectedUserName = the user the event is about (the banned/moderated user)
+        var displayName = ev.AffectedUserName || ev.ActorName || null;
+        var nameHtml = displayName
+            ? '<strong>' + escHtml(displayName) + '</strong>'
+            : '<em style="color:var(--theme-text-color-secondary,#aaa);">unknown user</em>';
+
+        var subtext = '';
+        if (ev.Action === 'mod.ban.auto' || ev.Action === 'admin.ban_user') {
+            var banSuffix = '';
+            if (detail.banType === 'permanent') {
+                banSuffix = ' (permanent)';
+            } else if (detail.expiresAt) {
+                var exp = new Date(detail.expiresAt);
+                var created = new Date(ev.CreatedAt);
+                var mins = Math.round((exp - created) / 60000);
+                var durationStr = mins >= 1440 ? Math.round(mins / 1440) + 'd' : mins >= 60 ? Math.round(mins / 60) + 'h' : mins + 'm';
+                banSuffix = ' (' + durationStr + ', until ' + exp.toLocaleDateString() + ' ' + exp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ')';
+            }
+            subtext = escHtml(detail.reason || '') + banSuffix;
+        } else if (ev.Action === 'moderation.comment_denied') {
+            subtext = escHtml(detail.reason || '');
+        } else if (ev.Action === 'moderation.comment_approved') {
+            subtext = detail.finalStatus === 'spoiler' ? 'marked as spoiler' : '';
+        } else if (ev.Action === 'comment.report') {
+            subtext = (detail.newReportCount || 3) + ' reports' + (detail.reason ? ' — ' + escHtml(detail.reason) : '');
+        }
+
+        var previewHtml = ev.CommentPreview
+            ? '<div style="font-size:0.8em; color:var(--theme-text-color-secondary,#aaa); margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">' + escHtml(ev.CommentPreview) + '</div>'
+            : '';
+
+        var row = document.createElement('div');
+        row.style.cssText = 'display:flex; align-items:flex-start; gap:0.75em; padding:0.6em 0.8em; border-bottom:1px solid var(--theme-border-color,#333);';
+        row.innerHTML =
+            '<span style="font-size:1.1em; flex-shrink:0; margin-top:1px;">' + label.icon + '</span>' +
+            '<div style="flex:1; min-width:0;">' +
+              '<div style="font-size:0.88em;">' +
+                '<span style="color:var(--theme-text-color-secondary,#aaa);">' + escHtml(label.text) + '</span>' +
+                ' — ' + nameHtml +
+                (subtext ? '<span style="color:var(--theme-text-color-secondary,#aaa);"> — ' + subtext + '</span>' : '') +
+              '</div>' +
+              previewHtml +
+              '<div style="font-size:0.75em; color:var(--theme-text-color-secondary,#aaa); margin-top:2px;">' + formatFeedTime(ev.CreatedAt) + '</div>' +
+            '</div>';
+        return row;
+    }
+
+    function escHtml(str) {
+        return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    function loadActivityFeed(instance, cursor, append) {
+        var view = instance.view;
+        var feedEl = view.querySelector('.ecActivityFeed');
+        var loadMoreBtn = view.querySelector('.btnLoadMoreActivity');
+        var updatedEl = view.querySelector('.ecActivityFeedUpdated');
+
+        if (!append) {
+            feedEl.innerHTML = '<p style="color:var(--theme-text-color-secondary,#aaa);padding:1em;margin:0;">Loading activity...</p>';
+        }
+
+        var url = ApiClient.getUrl('embycomments/activity-feed') + '?limit=25' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
+        ApiClient.ajax({ type: 'GET', url: url, dataType: 'json' }).then(function (data) {
+            if (!append) feedEl.innerHTML = '';
+
+            if (data.error) {
+                if (!append) feedEl.innerHTML = '<p style="color:var(--theme-error-color,#e74c3c);padding:1em;margin:0;">' + escHtml(data.error) + '</p>';
+                return;
+            }
+
+            var events = data.Events || data.events || [];
+            var nextCursor = data.NextCursor || data.nextCursor || null;
+            if (events.length === 0 && !append) {
+                feedEl.innerHTML = '<p style="color:var(--theme-text-color-secondary,#aaa);padding:1em;margin:0;">No moderation events yet.</p>';
+            } else {
+                events.forEach(function (ev) {
+                    feedEl.appendChild(renderFeedEvent(ev));
+                });
+            }
+
+            instance.feedCursor = nextCursor;
+            if (loadMoreBtn) loadMoreBtn.style.display = nextCursor ? '' : 'none';
+            if (updatedEl) updatedEl.textContent = 'Updated ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        }).catch(function (err) {
+            if (!append) feedEl.innerHTML = '<p style="color:var(--theme-error-color,#e74c3c);padding:1em;margin:0;">Failed to load activity feed.</p>';
+            console.error('[EmbyComments] activity feed error:', err);
+        });
+    }
+
+    function startFeedRefresh(instance) {
+        stopFeedRefresh(instance);
+        instance.feedTimer = setInterval(function () {
+            loadActivityFeed(instance, null, false);
+        }, FEED_REFRESH_INTERVAL);
+    }
+
+    function stopFeedRefresh(instance) {
+        if (instance.feedTimer) { clearInterval(instance.feedTimer); instance.feedTimer = null; }
+    }
+
     function loadConfig(instance) {
         var view = instance.view;
         setLoading(view);
@@ -320,6 +440,14 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
                     }
 
                     renderUsers(instance, users, entries, isAdmin);
+
+                    if (isAdmin) {
+                        var feedSection = view.querySelector('.ecActivityFeedSection');
+                        if (feedSection) feedSection.style.display = '';
+                        loadActivityFeed(instance, null, false);
+                        startFeedRefresh(instance);
+                    }
+
                     loading.hide();
                 });
             });
@@ -406,6 +534,8 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
         this.apiEndpoint = null;
         this.pollTimer = null;
         this.pollCount = 0;
+        this.feedTimer = null;
+        this.feedCursor = null;
         var instance = this;
         view.querySelector('form').addEventListener('submit', function (e) { onSubmit(instance, e); });
         var chkLocal = view.querySelector('#chkServerLocalOnly');
@@ -413,6 +543,12 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
             chkLocal.addEventListener('change', function () {
                 var saveBtn = view.querySelector('.btnSaveAll');
                 if (saveBtn) saveBtn.disabled = !hasChanges(instance);
+            });
+        }
+        var loadMoreBtn = view.querySelector('.btnLoadMoreActivity');
+        if (loadMoreBtn) {
+            loadMoreBtn.addEventListener('click', function () {
+                if (instance.feedCursor) loadActivityFeed(instance, instance.feedCursor, true);
             });
         }
     }
@@ -427,6 +563,8 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
     View.prototype.onPause = function () {
         BaseView.prototype.onPause.apply(this, arguments);
         if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; }
+        stopFeedRefresh(this);
+        this.feedCursor = null;
         setLoading(this.view);
         this.originalValues = {};
     };
