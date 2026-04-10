@@ -5,7 +5,7 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Threading.Tasks;
 
-namespace EmbyComments.Api
+namespace CommunityComments.Api
 {
     public class CommentsApiClient
     {

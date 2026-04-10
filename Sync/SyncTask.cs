@@ -5,20 +5,20 @@ using System.Threading.Tasks;
 using MediaBrowser.Model.Logging;
 using MediaBrowser.Model.Tasks;
 
-namespace EmbyComments.Sync
+namespace CommunityComments.Sync
 {
     public class SyncTask : IScheduledTask
     {
         private readonly ILogger _logger;
 
         public string Name => "Sync Community Comments";
-        public string Key => "EmbyCommentsSyncTask";
+        public string Key => "CommunityCommentsSyncTask";
         public string Description => "Pulls latest comments from the community comments service.";
-        public string Category => "Emby Comments";
+        public string Category => "Community Comments";
 
         public SyncTask(ILogManager logManager)
         {
-            _logger = logManager.GetLogger("EmbyComments");
+            _logger = logManager.GetLogger("CommunityComments");
         }
 
         public IEnumerable<TaskTriggerInfo> GetDefaultTriggers()
@@ -32,11 +32,11 @@ namespace EmbyComments.Sync
 
         public async Task Execute(CancellationToken cancellationToken, IProgress<double> progress)
         {
-            _logger.Info("EmbyComments: Sync running");
+            _logger.Info("CommunityComments: Sync running");
             progress.Report(0);
             await Task.CompletedTask;
             progress.Report(100);
-            _logger.Info("EmbyComments: Sync complete");
+            _logger.Info("CommunityComments: Sync complete");
         }
     }
 }

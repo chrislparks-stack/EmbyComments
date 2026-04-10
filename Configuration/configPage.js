@@ -31,18 +31,18 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
     }
 
     function setLoading(view) {
-        view.querySelector('.embyCommentsUserList').innerHTML =
+        view.querySelector('.communityCommentsUserList').innerHTML =
             '<p style="color:var(--theme-text-color-secondary,#aaa);">Loading users...</p>';
         view.querySelector('.btnSaveAll').disabled = true;
     }
 
     function setError(view, msg) {
-        view.querySelector('.embyCommentsUserList').innerHTML =
+        view.querySelector('.communityCommentsUserList').innerHTML =
             '<p style="color:var(--theme-error-color,#e74c3c);">' + msg + '</p>';
     }
 
     function showStatus(view, msg, isError) {
-        var el = view.querySelector('.embyCommentsStatus');
+        var el = view.querySelector('.communityCommentsStatus');
         el.textContent = msg;
         el.style.color = isError ? 'var(--theme-error-color, #e74c3c)' : 'var(--theme-success-color, #2ecc71)';
         el.style.display = 'block';
@@ -88,7 +88,7 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
 
     function renderUsers(instance, users, entries, isAdmin) {
         var view = instance.view;
-        var userList = view.querySelector('.embyCommentsUserList');
+        var userList = view.querySelector('.communityCommentsUserList');
         var saveBtn = view.querySelector('.btnSaveAll');
         userList.innerHTML = '';
 
@@ -200,7 +200,7 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
             var userKey = serverId + ':' + user.Id;
             ApiClient.ajax({
                 type: 'POST',
-                url: ApiClient.getUrl('embycomments/register-name'),
+                url: ApiClient.getUrl('communitycomments/register-name'),
                 dataType: 'json',
                 contentType: 'application/json',
                 data: JSON.stringify({ UserKey: userKey, DisplayName: customName, CheckOnly: true })
@@ -256,7 +256,7 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
             pendingUsers.forEach(function (pu) {
                 ApiClient.ajax({
                     type: 'POST',
-                    url: ApiClient.getUrl('embycomments/register-name'),
+                    url: ApiClient.getUrl('communitycomments/register-name'),
                     dataType: 'json',
                     contentType: 'application/json',
                     data: JSON.stringify({ UserKey: pu.userKey, DisplayName: pu.displayName, CheckOnly: true })
@@ -293,7 +293,9 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
         'admin.unban_user':          { icon: '🔓', text: 'Unbanned' },
         'moderation.comment_denied': { icon: '❌', text: 'Comment denied' },
         'moderation.comment_approved': { icon: '✅', text: 'Comment approved' },
-        'comment.report':            { icon: '⚠️', text: 'Report threshold' }
+        'comment.report':            { icon: '⚠️', text: 'Report threshold' },
+        'admin.server_ban':          { icon: '🔴', text: 'Server banned' },
+        'admin.server_unban':        { icon: '🟢', text: 'Server reinstated' }
     };
 
     function formatFeedTime(iso) {
@@ -313,6 +315,7 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
             : '<em style="color:var(--theme-text-color-secondary,#aaa);">unknown user</em>';
 
         var subtext = '';
+        var rowBorderLeft = '';
         if (ev.Action === 'mod.ban.auto' || ev.Action === 'admin.ban_user') {
             var banSuffix = '';
             if (detail.banType === 'permanent') {
@@ -331,6 +334,39 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
             subtext = detail.finalStatus === 'spoiler' ? 'marked as spoiler' : '';
         } else if (ev.Action === 'comment.report') {
             subtext = (detail.newReportCount || 3) + ' reports' + (detail.reason ? ' — ' + escHtml(detail.reason) : '');
+        } else if (ev.Action === 'admin.server_ban') {
+            nameHtml = '';
+            var banReason = escHtml(detail.reason || '');
+            var banRow = document.createElement('div');
+            banRow.style.cssText = 'padding:0.75em 0.9em; border-bottom:1px solid var(--theme-border-color,#333); background:rgba(231,76,60,0.15); border-left:4px solid #e74c3c;';
+            var infoSvg = '<svg viewBox="0 0 24 24" width="13" height="13" style="vertical-align:-1px;"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>';
+            banRow.innerHTML =
+                '<div style="display:flex;align-items:center;gap:0.5em;margin-bottom:0.3em;">' +
+                  '<span style="font-size:1.2em;">🔴</span>' +
+                  '<strong style="color:#e74c3c;font-size:0.9em;letter-spacing:0.03em;">SERVER BANNED</strong>' +
+                  '<button class="ec-feed-info-btn" style="background:none;border:none;color:#e74c3c;cursor:pointer;opacity:0.65;padding:0 0.25em;line-height:1;" title="What does this mean?">' + infoSvg + '</button>' +
+                '</div>' +
+                '<div class="ec-feed-ban-detail" style="display:none;font-size:0.8em;color:var(--theme-text-color,#ddd);margin-bottom:0.25em;padding:0.45em 0.6em;background:rgba(231,76,60,0.08);border-radius:4px;line-height:1.5;">All users on this server are blocked from posting comments, replies, or reactions. The server admin can see this event in their activity feed.</div>' +
+                (banReason ? '<div style="font-size:0.85em;color:var(--theme-text-color,#ddd);margin-bottom:0.25em;"><span style="color:#e74c3c;font-weight:600;">Reason:</span> ' + banReason + '</div>' : '') +
+                '<div style="font-size:0.75em;color:var(--theme-text-color-secondary,#aaa);">' + formatFeedTime(ev.CreatedAt) + '</div>';
+            banRow.querySelector('.ec-feed-info-btn').addEventListener('click', function () {
+                var d = banRow.querySelector('.ec-feed-ban-detail');
+                if (d) d.style.display = d.style.display === 'none' ? 'block' : 'none';
+            });
+            return banRow;
+        } else if (ev.Action === 'admin.server_unban') {
+            nameHtml = '';
+            var unbanMessage = escHtml(detail.message || '');
+            var unbanRow = document.createElement('div');
+            unbanRow.style.cssText = 'padding:0.6em 0.9em; border-bottom:1px solid var(--theme-border-color,#333); background:rgba(46,204,113,0.08); border-left:4px solid #2ecc71;';
+            unbanRow.innerHTML =
+                '<div style="display:flex;align-items:center;gap:0.5em;margin-bottom:0.2em;">' +
+                  '<span style="font-size:1.1em;">🟢</span>' +
+                  '<strong style="color:#2ecc71;font-size:0.88em;">Server reinstated</strong>' +
+                '</div>' +
+                (unbanMessage ? '<div style="font-size:0.85em;color:var(--theme-text-color,#ddd);margin-bottom:0.2em;"><span style="color:#2ecc71;font-weight:600;">Message:</span> ' + unbanMessage + '</div>' : '') +
+                '<div style="font-size:0.75em;color:var(--theme-text-color-secondary,#aaa);">' + formatFeedTime(ev.CreatedAt) + '</div>';
+            return unbanRow;
         }
 
         var previewHtml = ev.CommentPreview
@@ -338,13 +374,14 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
             : '';
 
         var row = document.createElement('div');
-        row.style.cssText = 'display:flex; align-items:flex-start; gap:0.75em; padding:0.6em 0.8em; border-bottom:1px solid var(--theme-border-color,#333);';
+        row.style.cssText = 'display:flex; align-items:flex-start; gap:0.75em; padding:0.6em 0.8em; border-bottom:1px solid var(--theme-border-color,#333);' + (rowBorderLeft ? 'border-left:' + rowBorderLeft + ';' : '');
+        var nameSeparator = nameHtml ? ' — ' + nameHtml : '';
         row.innerHTML =
             '<span style="font-size:1.1em; flex-shrink:0; margin-top:1px;">' + label.icon + '</span>' +
             '<div style="flex:1; min-width:0;">' +
               '<div style="font-size:0.88em;">' +
                 '<span style="color:var(--theme-text-color-secondary,#aaa);">' + escHtml(label.text) + '</span>' +
-                ' — ' + nameHtml +
+                nameSeparator +
                 (subtext ? '<span style="color:var(--theme-text-color-secondary,#aaa);"> — ' + subtext + '</span>' : '') +
               '</div>' +
               previewHtml +
@@ -363,13 +400,14 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
         var loadMoreBtn = view.querySelector('.btnLoadMoreActivity');
         var updatedEl = view.querySelector('.ecActivityFeedUpdated');
 
-        if (!append) {
+        if (!append && !instance.feedLoaded) {
             feedEl.innerHTML = '<p style="color:var(--theme-text-color-secondary,#aaa);padding:1em;margin:0;">Loading activity...</p>';
         }
 
-        var url = ApiClient.getUrl('embycomments/activity-feed') + '?limit=25' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
+        var url = ApiClient.getUrl('communitycomments/activity-feed') + '?limit=25' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
         ApiClient.ajax({ type: 'GET', url: url, dataType: 'json' }).then(function (data) {
             if (!append) feedEl.innerHTML = '';
+            instance.feedLoaded = true;
 
             if (data.error) {
                 if (!append) feedEl.innerHTML = '<p style="color:var(--theme-error-color,#e74c3c);padding:1em;margin:0;">' + escHtml(data.error) + '</p>';
@@ -391,7 +429,7 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
             if (updatedEl) updatedEl.textContent = 'Updated ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         }).catch(function (err) {
             if (!append) feedEl.innerHTML = '<p style="color:var(--theme-error-color,#e74c3c);padding:1em;margin:0;">Failed to load activity feed.</p>';
-            console.error('[EmbyComments] activity feed error:', err);
+            console.error('[CommunityComments] activity feed error:', err);
         });
     }
 
@@ -452,7 +490,7 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
                 });
             });
         }).catch(function (err) {
-            console.error('[EmbyComments] loadConfig failed:', err);
+            console.error('[CommunityComments] loadConfig failed:', err);
             setError(view, 'Failed to load: ' + (err.message || JSON.stringify(err)));
         });
     }
@@ -469,7 +507,7 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
             promises.push(
                 ApiClient.ajax({
                     type: 'POST',
-                    url: ApiClient.getUrl('embycomments/register-name'),
+                    url: ApiClient.getUrl('communitycomments/register-name'),
                     dataType: 'json',
                     contentType: 'application/json',
                     data: JSON.stringify({ UserKey: userKey, DisplayName: name })
@@ -522,7 +560,7 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
                 showStatus(view, 'Settings saved.');
                 startModerationPoll(instance, inputs);
             }).catch(function (err) {
-                console.error('[EmbyComments] save failed:', err);
+                console.error('[CommunityComments] save failed:', err);
                 showStatus(view, 'Save failed: ' + (err.message || JSON.stringify(err)), true);
             });
         });
@@ -536,6 +574,7 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
         this.pollCount = 0;
         this.feedTimer = null;
         this.feedCursor = null;
+        this.feedLoaded = false;
         var instance = this;
         view.querySelector('form').addEventListener('submit', function (e) { onSubmit(instance, e); });
         var chkLocal = view.querySelector('#chkServerLocalOnly');
@@ -565,6 +604,7 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
         if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; }
         stopFeedRefresh(this);
         this.feedCursor = null;
+        this.feedLoaded = false;
         setLoading(this.view);
         this.originalValues = {};
     };

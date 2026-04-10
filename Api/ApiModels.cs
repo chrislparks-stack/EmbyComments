@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 
-namespace EmbyComments.Api
+namespace CommunityComments.Api
 {
     public class ActivityFeedEvent
     {

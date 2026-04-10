@@ -6,19 +6,19 @@ using MediaBrowser.Controller;
 using MediaBrowser.Controller.Net;
 using MediaBrowser.Model.Services;
 
-namespace EmbyComments.Api
+namespace CommunityComments.Api
 {
-    [Route("/embycomments/config", "GET", Summary = "Get plugin configuration for any authenticated user")]
+    [Route("/communitycomments/config", "GET", Summary = "Get plugin configuration for any authenticated user")]
     public class GetConfig : IReturn<object> { }
 
-    [Route("/embycomments/init", "POST", Summary = "Register user and get session token")]
+    [Route("/communitycomments/init", "POST", Summary = "Register user and get session token")]
     public class InitUser : IReturn<object>
     {
         public string UserKey { get; set; }
         public string DisplayName { get; set; }
     }
 
-    [Route("/embycomments/register-name", "POST", Summary = "Sync display name to Worker")]
+    [Route("/communitycomments/register-name", "POST", Summary = "Sync display name to Worker")]
     public class RegisterName : IReturn<object>
     {
         public string UserKey { get; set; }
@@ -26,7 +26,7 @@ namespace EmbyComments.Api
         public bool CheckOnly { get; set; }
     }
 
-    [Route("/embycomments/activity-feed", "GET", Summary = "Get high-priority moderation activity feed (admin only)")]
+    [Route("/communitycomments/activity-feed", "GET", Summary = "Get high-priority moderation activity feed (admin only)")]
     public class GetActivityFeed : IReturn<object>
     {
         public string Cursor { get; set; }
@@ -203,7 +203,7 @@ namespace EmbyComments.Api
                     foreach (var item in items.EnumerateArray())
                     {
                         var appName = item.TryGetProperty("AppName", out var an) ? an.GetString() : null;
-                        if (string.Equals(appName, "EmbyComments", StringComparison.OrdinalIgnoreCase))
+                        if (string.Equals(appName, "CommunityComments", StringComparison.OrdinalIgnoreCase) || string.Equals(appName, "EmbyComments", StringComparison.OrdinalIgnoreCase))
                         {
                             var key = item.TryGetProperty("AccessToken", out var at) ? at.GetString() : null;
                             if (!string.IsNullOrEmpty(key))
@@ -218,7 +218,7 @@ namespace EmbyComments.Api
                 // Only create if we didn't find one
                 if (string.IsNullOrEmpty(config.EmbyApiKey))
                 {
-                    var createKeyUrl = $"{localBaseUrl}/emby/Auth/Keys?App=EmbyComments";
+                    var createKeyUrl = $"{localBaseUrl}/emby/Auth/Keys?App=CommunityComments";
                     var createRequest = new HttpRequestMessage(HttpMethod.Post, createKeyUrl);
                     createRequest.Headers.Add("X-Emby-Token", adminToken);
 
@@ -240,7 +240,7 @@ namespace EmbyComments.Api
                         foreach (var item in items2.EnumerateArray())
                         {
                             var appName = item.TryGetProperty("AppName", out var an) ? an.GetString() : null;
-                            if (string.Equals(appName, "EmbyComments", StringComparison.OrdinalIgnoreCase))
+                            if (string.Equals(appName, "CommunityComments", StringComparison.OrdinalIgnoreCase) || string.Equals(appName, "EmbyComments", StringComparison.OrdinalIgnoreCase))
                             {
                                 var key = item.TryGetProperty("AccessToken", out var at) ? at.GetString() : null;
                                 if (!string.IsNullOrEmpty(key))

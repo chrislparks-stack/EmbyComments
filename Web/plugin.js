@@ -32,6 +32,8 @@ define([], function () {
     var initReady = new Promise(function (resolve) { initResolve = resolve; });
     var serverLocalOnly = false;
     var banInfo = null;
+    var serverBanInfo = null;
+    var pendingRefresh = null;
     var banSocket = null;
     var banSocketRetries = 0;
     var initRetries = 0;
@@ -71,7 +73,7 @@ define([], function () {
         if (initRetries >= MAX_INIT_RETRIES) return;
         initRetries++;
 
-        ApiClient.getJSON(ApiClient.getUrl('embycomments/config')).then(function (config) {
+        ApiClient.getJSON(ApiClient.getUrl('communitycomments/config')).then(function (config) {
             apiEndpoint = config.ApiEndpoint;
             serverLocalOnly = !!config.ServerLocalCommentsOnly;
             serverGuid = ApiClient.serverId();
@@ -95,7 +97,7 @@ define([], function () {
                 var userKey = serverGuid + ':' + userId;
                 return ApiClient.ajax({
                     type: 'POST',
-                    url: ApiClient.getUrl('embycomments/init'),
+                    url: ApiClient.getUrl('communitycomments/init'),
                     dataType: 'json',
                     contentType: 'application/json',
                     data: JSON.stringify({ UserKey: userKey, DisplayName: displayName })
@@ -120,7 +122,7 @@ define([], function () {
     }
 
     function refreshConfig() {
-        return ApiClient.getJSON(ApiClient.getUrl('embycomments/config')).then(function (config) {
+        return ApiClient.getJSON(ApiClient.getUrl('communitycomments/config')).then(function (config) {
             serverLocalOnly = !!config.ServerLocalCommentsOnly;
         }).catch(function () { /* keep existing value */ });
     }
@@ -130,7 +132,7 @@ define([], function () {
         var userKey = serverGuid + ':' + userId;
         return ApiClient.ajax({
             type: 'POST',
-            url: ApiClient.getUrl('embycomments/init'),
+            url: ApiClient.getUrl('communitycomments/init'),
             dataType: 'json',
             contentType: 'application/json',
             data: JSON.stringify({ UserKey: userKey, DisplayName: displayName })
@@ -172,8 +174,26 @@ define([], function () {
         }
     }
 
+    function isUserWriting(section) {
+        var mainTextarea = section.querySelector('#ec-body');
+        if (mainTextarea && mainTextarea.value.trim().length > 0) return true;
+        var replyTextareas = section.querySelectorAll('.ec-reply-inline textarea');
+        for (var i = 0; i < replyTextareas.length; i++) {
+            if (replyTextareas[i].value.trim().length > 0) return true;
+        }
+        return false;
+    }
+
+    function loadCommentsOrDefer(section, bustCache) {
+        if (isUserWriting(section)) {
+            pendingRefresh = { bustCache: bustCache };
+        } else {
+            loadComments(section, bustCache);
+        }
+    }
+
     function cleanup() {
-        var old = document.getElementById('embycomments-section');
+        var old = document.getElementById('communitycomments-section');
         if (old) old.parentNode.removeChild(old);
         lastInjectedItemId = null;
         currentPage = 0;
@@ -185,8 +205,10 @@ define([], function () {
         hasPendingActivity = false;
         userModerationStatus = 'approved';
         banInfo = null;
+        serverBanInfo = null;
         stopBanListener();
         stopModerationListener();
+        stopFeedListener();
         banSocketRetries = 0;
         moderationSocketRetries = 0;
     }
@@ -201,13 +223,13 @@ define([], function () {
 
     function waitAndInject(attempts, itemId) {
         var anchor = getVisibleAnchor();
-        if (anchor && !document.getElementById('embycomments-section')) { checkAndInject(itemId); return; }
+        if (anchor && !document.getElementById('communitycomments-section')) { checkAndInject(itemId); return; }
         if (attempts >= 50) return;
 
         // Use MutationObserver for instant detection, fall back to polling
         var observer = new MutationObserver(function () {
             var a = getVisibleAnchor();
-            if (a && !document.getElementById('embycomments-section')) {
+            if (a && !document.getElementById('communitycomments-section')) {
                 observer.disconnect();
                 checkAndInject(itemId);
             }
@@ -226,13 +248,13 @@ define([], function () {
         }
         if (!itemId || lastInjectedItemId === itemId) return;
         var anchor = getVisibleAnchor();
-        if (!anchor || document.getElementById('embycomments-section')) return;
+        if (!anchor || document.getElementById('communitycomments-section')) return;
 
         lastInjectedItemId = itemId;
 
         // Inject skeleton section immediately — before any API calls
         var section = document.createElement('div');
-        section.id = 'embycomments-section';
+        section.id = 'communitycomments-section';
         section.className = 'verticalSection verticalSection-cards';
         section.innerHTML = buildSectionHtml();
         anchor.parentNode.insertBefore(section, anchor);
@@ -267,6 +289,7 @@ define([], function () {
                 loadComments(section);
                 startBanListener(section);
                 startModerationListener(section);
+                startFeedListener(section);
             });
         }).catch(function () {
             section.remove();
@@ -290,8 +313,9 @@ define([], function () {
                 currentSort = data.sortPreference || 'newest';
                 languageFilter = data.languageFilter || [];
                 banInfo = data.ban || null;
+                serverBanInfo = data.serverBan || null;
             })
-            .catch(function () { reactionsMap = {}; hiddenSet = {}; reportedSet = {}; userModerationStatus = 'approved'; censorExplicit = false; banInfo = null; });
+            .catch(function () { reactionsMap = {}; hiddenSet = {}; reportedSet = {}; userModerationStatus = 'approved'; censorExplicit = false; banInfo = null; serverBanInfo = null; });
     }
 
     function fetchMyPending() {
@@ -316,7 +340,7 @@ define([], function () {
             var openReplies = section.querySelectorAll('.ec-reply-inline.open');
             for (var j = 0; j < openReplies.length; j++) openReplies[j].classList.remove('open');
         } else if (previousBan) {
-            loadComments(section);
+            loadCommentsOrDefer(section, false);
         }
     }
 
@@ -333,15 +357,26 @@ define([], function () {
 
         banSocket.onmessage = function (event) {
             try {
-                var prev = banInfo;
-                banInfo = JSON.parse(event.data).ban || null;
-                handleBanChange(section, prev);
+                var msg = JSON.parse(event.data);
+                if (Object.prototype.hasOwnProperty.call(msg, 'serverBan')) {
+                    var prevServerBan = serverBanInfo;
+                    serverBanInfo = msg.serverBan || null;
+                    var serverBanChanged = (!!prevServerBan) !== (!!serverBanInfo);
+                    if (serverBanChanged) {
+                        updateFormVisibility(section);
+                        loadCommentsOrDefer(section, true);
+                    }
+                } else {
+                    var prev = banInfo;
+                    banInfo = msg.ban || null;
+                    handleBanChange(section, prev);
+                }
             } catch (e) {}
         };
 
         banSocket.onclose = function () {
             banSocket = null;
-            if (!document.getElementById('embycomments-section')) return;
+            if (!document.getElementById('communitycomments-section')) return;
             if (banSocketRetries < 3) {
                 banSocketRetries++;
                 refreshToken().then(function () {
@@ -357,6 +392,170 @@ define([], function () {
 
     var moderationSocket = null;
     var moderationSocketRetries = 0;
+
+    var feedSocket = null;
+    var feedSocketRetries = 0;
+
+    function animateRemoveComment(el) {
+        var toRemove = [el];
+        var sib = el.nextElementSibling;
+        while (sib && !(sib.classList.contains('ec-c') && !sib.classList.contains('reply'))) {
+            toRemove.push(sib);
+            sib = sib.nextElementSibling;
+        }
+        toRemove.forEach(function(n) { n.classList.add('ec-fading-into'); });
+        el.addEventListener('animationend', function() {
+            toRemove.forEach(function(n) { if (n.parentNode) n.parentNode.removeChild(n); });
+        }, { once: true });
+    }
+
+    function animateCountChange(btn, newCount, iconHtml) {
+        var current = parseInt(btn.textContent.replace(/[^\d]/g, '') || '0');
+        if (current === newCount) return;
+        btn.innerHTML = iconHtml + ' ' + newCount;
+        btn.classList.remove('ec-count-bumping');
+        void btn.offsetWidth;
+        btn.classList.add('ec-count-bumping');
+        btn.addEventListener('animationend', function() {
+            btn.classList.remove('ec-count-bumping');
+        }, { once: true });
+    }
+
+    function applyFeedUpdate(section, list, freshData) {
+        if (currentPage !== 0 || currentSort !== 'newest') {
+            loadCommentsOrDefer(section, true);
+            return;
+        }
+        var freshComments = freshData.comments || [];
+
+        var currentMap = {};
+        list.querySelectorAll('.ec-c:not(.reply):not(.ec-awaiting)').forEach(function(el) {
+            var id = el.dataset.commentId;
+            if (id) currentMap[id] = el;
+        });
+
+        var freshMap = {};
+        freshComments.forEach(function(c) { freshMap[c.CommentId] = c; });
+
+        // 1. Remove comments no longer present
+        Object.keys(currentMap).forEach(function(id) {
+            if (!freshMap[id]) animateRemoveComment(currentMap[id]);
+        });
+
+        // 2. Insert new top-level comments at top (before first approved comment)
+        var insertRef = list.querySelector('.ec-c:not(.reply):not(.ec-awaiting)');
+        freshComments.forEach(function(c) {
+            if (currentMap[c.CommentId]) return;
+            var preCount = list.childElementCount;
+            appendComment(section, list, c);
+            var newEls = [];
+            for (var i = preCount; i < list.childElementCount; i++) newEls.push(list.children[i]);
+            newEls.forEach(function(ne) { list.insertBefore(ne, insertRef); });
+            if (newEls[0]) {
+                newEls[0].classList.add('ec-inserting');
+                newEls[0].addEventListener('animationend', function() {
+                    newEls[0].classList.remove('ec-inserting');
+                }, { once: true });
+            }
+        });
+
+        // 3. Update counts in-place for existing comments
+        freshComments.forEach(function(c) {
+            var el = currentMap[c.CommentId];
+            if (!el) return;
+            var likeBtn = el.querySelector('.ec-like-btn');
+            var dislikeBtn = el.querySelector('.ec-dislike-btn');
+            var userReaction = reactionsMap[c.CommentId] || null;
+            if (likeBtn) animateCountChange(likeBtn, c.LikeCount, userReaction === 'like' ? '\u2665' : '\u2661');
+            if (dislikeBtn) animateCountChange(dislikeBtn, c.DislikeCount, THUMB_DOWN_SVG);
+        });
+
+        // 4. Animate new/removed replies for existing parent comments
+        freshComments.forEach(function(c) {
+            var parentEl = currentMap[c.CommentId];
+            if (!parentEl || !c.Replies) return;
+            var freshReplies = c.Replies;
+
+            var existingReplyIds = {};
+            var lastReplyEl = null;
+            var sib = parentEl.nextElementSibling;
+            while (sib && !(sib.classList.contains('ec-c') && !sib.classList.contains('reply'))) {
+                if (sib.classList.contains('ec-c') && sib.classList.contains('reply')) {
+                    var rid = sib.dataset.commentId;
+                    if (rid) existingReplyIds[rid] = sib;
+                    lastReplyEl = sib;
+                }
+                sib = sib.nextElementSibling;
+            }
+
+            freshReplies.forEach(function(r) {
+                if (existingReplyIds[r.CommentId]) return;
+                var replyEl = createCommentEl(r, true);
+                var afterEl = lastReplyEl || parentEl.nextElementSibling;
+                var nextSib = afterEl ? afterEl.nextElementSibling : null;
+                insertWithAnimation(list, replyEl, nextSib);
+                wireActions(section, list, replyEl, r, true);
+                lastReplyEl = replyEl;
+            });
+
+            Object.keys(existingReplyIds).forEach(function(rid) {
+                var hasReply = freshReplies.some(function(r) { return r.CommentId === rid; });
+                if (!hasReply) {
+                    var replyEl = existingReplyIds[rid];
+                    replyEl.classList.add('ec-fading-into');
+                    replyEl.addEventListener('animationend', function() {
+                        if (replyEl.parentNode) replyEl.parentNode.removeChild(replyEl);
+                    }, { once: true });
+                }
+            });
+        });
+
+        if (freshData.total !== undefined) commentTotal = freshData.total;
+    }
+
+    function fetchAndDiffFeed(section) {
+        if (isLoading) return;
+        if (isUserWriting(section)) { pendingRefresh = { bustCache: true }; return; }
+        var list = section.querySelector('#ec-list');
+        if (!list) return;
+        var url = apiEndpoint + '/comments?mediaKey=' + encodeURIComponent(currentMediaKey)
+            + '&limit=' + PAGE_SIZE + '&offset=0&sort=' + currentSort
+            + '&_t=' + Date.now();
+        if (serverLocalOnly && serverGuid) url += '&serverGuid=' + encodeURIComponent(serverGuid);
+        if (languageFilter.length > 0) url += '&language=' + encodeURIComponent(languageFilter.join(','));
+        cfFetch(url).then(function(r) { return r.json(); })
+            .then(function(data) { applyFeedUpdate(section, list, data); })
+            .catch(function() {});
+    }
+
+    function startFeedListener(section) {
+        stopFeedListener();
+        if (!apiEndpoint || !currentMediaKey || !sessionToken) return;
+
+        var wsUrl = apiEndpoint.replace('https://', 'wss://').replace('http://', 'ws://')
+            + '/feed-ws?mediaKey=' + encodeURIComponent(currentMediaKey)
+            + '&token=' + encodeURIComponent(sessionToken);
+
+        feedSocket = new WebSocket(wsUrl);
+        feedSocketRetries = 0;
+
+        feedSocket.onmessage = function () {
+            fetchAndDiffFeed(section);
+        };
+
+        feedSocket.onclose = function () {
+            feedSocket = null;
+            if (!document.getElementById('communitycomments-section')) return;
+            if (feedSocketRetries < 3) {
+                feedSocketRetries++;
+                setTimeout(function () { startFeedListener(section); }, 2000 * feedSocketRetries);
+            }
+        };
+    }
+
+    function stopFeedListener() {
+        if (feedSocket) { feedSocket.close(); feedSocket = null; }
+    }
 
     function startModerationListener(section) {
         stopModerationListener();
@@ -378,7 +577,7 @@ define([], function () {
 
         moderationSocket.onclose = function () {
             moderationSocket = null;
-            if (!document.getElementById('embycomments-section')) return;
+            if (!document.getElementById('communitycomments-section')) return;
             if (moderationSocketRetries < 3) {
                 moderationSocketRetries++;
                 refreshToken().then(function () {
@@ -422,7 +621,7 @@ define([], function () {
                 });
             } else if (!el0 && msg.status === 'approved') {
                 // Admin approved a previously dismissed comment — reload to surface it.
-                loadComments(section, true);
+                loadCommentsOrDefer(section, true);
             }
             // Cross-media push or element already gone: no action needed.
             return;
@@ -433,7 +632,12 @@ define([], function () {
         var scroll = section.querySelector('#ec-scroll');
         if (!list) return;
         var el = list.querySelector('.ec-c[data-comment-id="' + commentId + '"]');
-        if (!el) return;
+        if (!el) {
+            // Pending element was removed (e.g., list rebuilt while awaiting moderation)
+            if (msg.status === 'approved') loadCommentsOrDefer(section, true);
+            pendingComments.splice(pendingIdx, 1);
+            return;
+        }
 
         var isReply = !!pending.ParentCommentId;
         var avatarSrc = pending.AvatarBlob || userAvatarBlob;
@@ -477,9 +681,23 @@ define([], function () {
     function updateFormVisibility(section) {
         var nameWarning = section.querySelector('#ec-name-warning');
         var banWarning = section.querySelector('#ec-ban-warning');
+        var serverBanWarning = section.querySelector('#ec-server-ban-warning');
         var formToggle = section.querySelector('#ec-form-toggle');
-        if (banInfo) {
+        if (serverBanInfo) {
             nameWarning.style.display = 'none';
+            banWarning.style.display = 'none';
+            serverBanWarning.innerHTML =
+                '<div style="display:flex;align-items:center;gap:0.5em;">' +
+                '\uD83D\uDEAB <strong>YOUR SERVER IS CURRENTLY BANNED</strong>' +
+                '</div>' +
+                '<div style="margin-top:0.35em;font-size:0.9em;opacity:0.85;line-height:1.4;">' +
+                'You cannot post comments, replies, or interact with content. Contact your server administrator for more information.' +
+                '</div>';
+            serverBanWarning.style.display = 'flex';
+            formToggle.style.display = 'none';
+        } else if (banInfo) {
+            nameWarning.style.display = 'none';
+            serverBanWarning.style.display = 'none';
             if (banInfo.isAdmin) {
                 if (banInfo.banType === 'permanent') {
                     banWarning.innerHTML = WARNING_SVG + ' You have been permanently banned by a comments admin. Reason: ' + esc(banInfo.reason);
@@ -497,10 +715,12 @@ define([], function () {
             formToggle.style.display = 'none';
         } else if (userModerationStatus === 'denied') {
             banWarning.style.display = 'none';
+            serverBanWarning.style.display = 'none';
             nameWarning.style.display = 'flex';
             formToggle.style.display = 'none';
         } else {
             banWarning.style.display = 'none';
+            serverBanWarning.style.display = 'none';
             nameWarning.style.display = 'none';
             formToggle.style.display = '';
         }
@@ -519,7 +739,7 @@ define([], function () {
 
     function buildSectionHtml() {
         return '<style>' +
-            '#embycomments-section { font-family:inherit; color:inherit; position:relative; }' +
+            '#communitycomments-section { font-family:inherit; color:inherit; position:relative; }' +
             '.ec-content { padding-bottom:1.5em; }' +
             '.ec-summary { display:flex; align-items:center; gap:1em; padding:0.4em 0; margin-bottom:0.4em; flex-wrap:wrap; }' +
             '.ec-avg { display:flex; align-items:baseline; gap:0.25em; }' +
@@ -541,6 +761,7 @@ define([], function () {
             '.ec-spark { flex-shrink:0; } .ec-spark svg { display:block; }' +
             '.ec-name-warning { display:none; align-items:center; gap:0.5em; padding:0.6em 1em; margin-bottom:0.6em; border-radius:8px; background:rgba(231,76,60,0.1); border:1px solid rgba(231,76,60,0.25); color:#e74c3c; font-size:0.85em; }' +
             '.ec-ban-warning { display:none; align-items:center; gap:0.5em; padding:0.6em 1em; margin-bottom:0.6em; border-radius:8px; background:rgba(231,76,60,0.1); border:1px solid rgba(231,76,60,0.25); color:#e74c3c; font-size:0.85em; }' +
+            '.ec-server-ban-warning { display:none; flex-direction:column; padding:0.85em 1em; margin-bottom:0.6em; border-radius:8px; background:rgba(231,76,60,0.15); border:1px solid rgba(231,76,60,0.4); border-left:4px solid #e74c3c; color:#e74c3c; font-size:0.85em; }' +
             '.ec-form-toggle { background:color-mix(in srgb, currentColor 5%, transparent); border:1px solid color-mix(in srgb, currentColor 10%, transparent); border-radius:8px; color:inherit; opacity:0.5; cursor:pointer; font-size:0.85em; font-family:inherit; padding:0.6em 1em; margin-bottom:0.6em; display:block; width:100%; text-align:left; transition:all 0.2s; backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); }' +
             '.ec-form-toggle:hover { opacity:0.7; background:color-mix(in srgb, currentColor 8%, transparent); }' +
             '.ec-form { display:none; margin-bottom:0.8em; position:relative; } .ec-form.open { display:block; }' +
@@ -613,6 +834,7 @@ define([], function () {
             '.ec-c-foot { display:flex; align-items:center; gap:0.4em; margin-top:5px; }' +
             '.ec-c-act { background:none; border:none; color:inherit; opacity:0.5; cursor:pointer; font-size:0.72em; font-family:inherit; padding:2px 5px; border-radius:4px; transition:all 0.15s; display:inline-flex; align-items:center; gap:3px; }' +
             '.ec-c-act:hover { background:color-mix(in srgb, currentColor 5%, transparent); opacity:0.7; }' +
+            '.ec-interaction-banned { opacity:0.15 !important; cursor:not-allowed !important; pointer-events:none; }' +
             '.ec-c-act.ec-liked { color:#e74c3c; opacity:1; } .ec-c-act.ec-liked:hover { color:#c0392b; }' +
             '.ec-c-act.ec-disliked { color:#3498db; opacity:1; } .ec-c-act.ec-disliked:hover { color:#2980b9; }' +
             '.ec-report-btn { background:none; border:none; color:#e74c3c; opacity:0.35; cursor:pointer; padding:2px 4px; border-radius:3px; transition:all 0.15s; margin-left:auto; line-height:1; display:inline-flex; align-items:center; gap:3px; font-size:0.72em; font-family:inherit; }' +
@@ -653,6 +875,8 @@ define([], function () {
             '@keyframes ec-shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }' +
             '@keyframes ec-slide-in { from { opacity:0; transform:translateY(-8px); } to { opacity:1; transform:translateY(0); } }' +
             '.ec-inserting { animation:ec-slide-in 0.3s ease-out; } .ec-inserting.ec-awaiting { animation:ec-slide-in 0.3s ease-out; opacity:0.5; }' +
+            '@keyframes ec-count-bump { 0%,100%{transform:scale(1)} 50%{transform:scale(1.3)} }' +
+            '.ec-count-bumping { animation:ec-count-bump 0.35s ease; display:inline-block; }' +
             '.ec-c.ec-highlight, .ec-c.reply.ec-highlight { background:rgba(46,204,113,0.12) !important; border-left:3px solid rgba(46,204,113,0.6); transition:background 1s ease-out, border-left-color 1s ease-out; }' +
             '.ec-c.ec-highlight-denied, .ec-c.reply.ec-highlight-denied { background:rgba(231,76,60,0.12) !important; border-left:3px solid rgba(231,76,60,0.6); transition:background 1s ease-out, border-left-color 1s ease-out; }' +
             '.ec-c.ec-highlight-fade { background:transparent !important; border-left-color:transparent !important; }' +
@@ -689,6 +913,7 @@ define([], function () {
             '<div class="ec-scope-row" id="ec-scope-row" style="display:none;"></div>' +
             '<div class="ec-error" id="ec-error"></div>' +
             '<div class="ec-name-warning" id="ec-name-warning">' + WARNING_SVG + ' Your display name has been flagged as inappropriate. You cannot post comments or replies until you update your name in the plugin settings.</div>' +
+            '<div class="ec-server-ban-warning" id="ec-server-ban-warning"></div>' +
             '<div class="ec-ban-warning" id="ec-ban-warning"></div>' +
             '<button class="ec-form-toggle" id="ec-form-toggle">\u270E  Write a comment...</button>' +
             '<div class="ec-form" id="ec-form">' +
@@ -728,6 +953,7 @@ define([], function () {
             form.classList.remove('open');
             toggle.style.display = 'block';
             section.querySelector('#ec-body').value = '';
+            if (pendingRefresh) { var r = pendingRefresh; pendingRefresh = null; loadComments(section, r.bustCache); }
         });
     }
 
@@ -767,6 +993,10 @@ define([], function () {
             cfFetch(apiEndpoint + '/comments', { method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ MediaKey: currentMediaKey, MediaTitle: item.Name || '', UserUuid: userUuid, Body: body, StarRating: selectedRating > 0 ? selectedRating : null, ParentCommentId: null, IsSpoiler: isSpoiler, StarOnly: starOnly })
             }).then(function (r) { return r.json(); }).then(function (data) {
+                if (data.serverBanned) {
+                    showError(section, data.error || 'Your server has been suspended. Please contact your server administrator.');
+                    return;
+                }
                 if (data.banned) {
                     banInfo = { banType: data.banType, reason: data.banReason, expiresAt: data.banExpiresAt, isAdmin: data.isAdmin || false };
                     updateFormVisibility(section);
@@ -790,6 +1020,7 @@ define([], function () {
                 section.querySelectorAll('#ec-stars span').forEach(function (s) { s.classList.remove('active'); });
                 section.querySelector('#ec-form').classList.remove('open');
                 section.querySelector('#ec-form-toggle').style.display = 'block';
+                pendingRefresh = null; // user finished writing — no deferred refresh needed
                 hasPendingActivity = true;
 
                 if (starOnly) {
@@ -1648,6 +1879,10 @@ define([], function () {
                                 ParentCommentId: pid
                             })
                         }).then(function (r) { return r.json(); }).then(function (data) {
+                            if (data.serverBanned) {
+                                showError(section, data.error || 'Your server has been suspended. Please contact your server administrator.');
+                                return;
+                            }
                             if (data.banned) {
                                 banInfo = { banType: data.banType, reason: data.banReason, expiresAt: data.banExpiresAt, isAdmin: data.isAdmin || false };
                                 updateFormVisibility(section);
@@ -1683,6 +1918,7 @@ define([], function () {
                             }
 
                             hasPendingActivity = true;
+                            pendingRefresh = null; // user finished writing — no deferred refresh needed
                         }).catch(function (err) {
                             showError(section, 'Failed to post reply: ' + err.message);
                         });
@@ -1692,6 +1928,7 @@ define([], function () {
                 if (cancelBtn) {
                     cancelBtn.addEventListener('click', function () {
                         resetReplyForm();
+                        if (pendingRefresh && !isUserWriting(section)) { var r = pendingRefresh; pendingRefresh = null; loadComments(section, r.bustCache); }
                     });
                 }
             }
@@ -1796,7 +2033,7 @@ define([], function () {
             '<div class="ec-c-foot">' +
             '<button class="ec-c-act ec-like-btn' + (reaction === 'like' ? ' ec-liked' : '') + '" data-id="' + c.CommentId + '">' + (reaction === 'like' ? '\u2665' : '\u2661') + ' ' + (c.LikeCount || 0) + '</button>' +
             '<button class="ec-c-act ec-dislike-btn' + (reaction === 'dislike' ? ' ec-disliked' : '') + '" data-id="' + c.CommentId + '">' + THUMB_DOWN_SVG + ' ' + (c.DislikeCount || 0) + '</button>' +
-            (!isReply && userModerationStatus !== 'denied' && !banInfo ? '<button class="ec-c-act ec-reply-toggle" data-id="' + c.CommentId + '">\u21a9 Reply</button>' : '') +
+            (!isReply && userModerationStatus !== 'denied' && !banInfo && !serverBanInfo ? '<button class="ec-c-act ec-reply-toggle" data-id="' + c.CommentId + '">\u21a9 Reply</button>' : '') +
             (!isOwn ? '<button class="ec-report-btn' + (reportedSet[c.CommentId] ? ' ec-reported' : '') + '" data-id="' + c.CommentId + '" title="Report comment">' + FLAG_SVG + (reportedSet[c.CommentId] ? ' Reported' : '') + '</button>' : '') +
             deleteHtml +
             '</div></div>';
@@ -1808,8 +2045,15 @@ define([], function () {
         var likeBtn = el.querySelector('.ec-like-btn');
         var dislikeBtn = el.querySelector('.ec-dislike-btn');
 
-        if (likeBtn) likeBtn.addEventListener('click', function () { postReaction(section, comment.CommentId, 'like', el); });
-        if (dislikeBtn) dislikeBtn.addEventListener('click', function () { postReaction(section, comment.CommentId, 'dislike', el); });
+        if (serverBanInfo) {
+            if (likeBtn) likeBtn.classList.add('ec-interaction-banned');
+            if (dislikeBtn) dislikeBtn.classList.add('ec-interaction-banned');
+            var repBtn = el.querySelector('.ec-report-btn');
+            if (repBtn) repBtn.classList.add('ec-interaction-banned');
+        }
+
+        if (likeBtn) likeBtn.addEventListener('click', function () { if (serverBanInfo) return; postReaction(section, comment.CommentId, 'like', el); });
+        if (dislikeBtn) dislikeBtn.addEventListener('click', function () { if (serverBanInfo) return; postReaction(section, comment.CommentId, 'dislike', el); });
 
         if (!isReply) {
             var toggle = el.querySelector('.ec-reply-toggle');
@@ -1866,6 +2110,7 @@ define([], function () {
         var reportBtn = el.querySelector('.ec-report-btn');
         if (reportBtn && !reportBtn.classList.contains('ec-reported')) {
             reportBtn.addEventListener('click', function () {
+                if (serverBanInfo) return;
                 // Remove any existing picker
                 var existing = document.querySelector('.ec-report-picker');
                 if (existing) { existing.remove(); return; }
@@ -2126,6 +2371,6 @@ define([], function () {
     init();
     startObserver();
 
-    function EmbyCommentsPlugin() { this.id = 'a4b7c2d1-e5f6-4a3b-8c9d-0e1f2a3b4c5d'; this.name = 'Emby Comments'; }
-    return EmbyCommentsPlugin;
+    function CommunityCommentsPlugin() { this.id = 'a4b7c2d1-e5f6-4a3b-8c9d-0e1f2a3b4c5d'; this.name = 'Community Comments'; }
+    return CommunityCommentsPlugin;
 });

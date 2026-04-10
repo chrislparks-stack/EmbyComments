@@ -2,7 +2,7 @@ using System.Collections.Generic;
 using System.Linq;
 using MediaBrowser.Model.Plugins;
 
-namespace EmbyComments
+namespace CommunityComments
 {
     public class UserDisplayNameEntry
     {

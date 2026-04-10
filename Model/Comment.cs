@@ -1,6 +1,6 @@
 using System;
 
-namespace EmbyComments.Model
+namespace CommunityComments.Model
 {
     public class Comment
     {

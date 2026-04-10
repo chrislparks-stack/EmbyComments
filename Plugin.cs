@@ -1,12 +1,12 @@
 using System;
 using System.Collections.Generic;
-using EmbyComments.Api;
+using CommunityComments.Api;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Common.Plugins;
 using MediaBrowser.Model.Plugins;
 using MediaBrowser.Model.Serialization;
 
-namespace EmbyComments
+namespace CommunityComments
 {
     public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
     {
@@ -20,10 +20,10 @@ namespace EmbyComments
             ApiClient = new CommentsApiClient();
         }
 
-        public override string Name => "Emby Comments";
+        public override string Name => "Community Comments";
         public override string Description => "Community comments and ratings for movies and TV shows.";
         public override Guid Id => new Guid("a4b7c2d1-e5f6-4a3b-8c9d-0e1f2a3b4c5d");
-        public override string ConfigurationFileName => "EmbyComments.xml";
+        public override string ConfigurationFileName => "CommunityComments.xml";
 
         public IEnumerable<PluginPageInfo> GetPages()
         {
@@ -31,18 +31,18 @@ namespace EmbyComments
             {
                 new PluginPageInfo
                 {
-                    Name = "EmbyCommentsConfigPage",
+                    Name = "CommunityCommentsConfigPage",
                     EmbeddedResourcePath = GetType().Namespace + ".Configuration.configPage.html",
                     IsMainConfigPage = true
                 },
                 new PluginPageInfo
                 {
-                    Name = "embycommentsjs",
+                    Name = "communitycommentsjs",
                     EmbeddedResourcePath = GetType().Namespace + ".Configuration.configPage.js"
                 },
                 new PluginPageInfo
                 {
-                    Name = "embycommentsplugin.js",
+                    Name = "communitycommentsplugin.js",
                     EmbeddedResourcePath = GetType().Namespace + ".Web.plugin.js"
                 }
             };
