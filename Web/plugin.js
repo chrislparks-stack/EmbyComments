@@ -874,7 +874,7 @@ define([], function () {
             '.ec-loading { text-align:center; padding:0.8em 0; opacity:0.2; font-size:0.8em; }' +
             '@keyframes ec-shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }' +
             '@keyframes ec-slide-in { from { opacity:0; transform:translateY(-8px); } to { opacity:1; transform:translateY(0); } }' +
-            '.ec-inserting { animation:ec-slide-in 0.3s ease-out; } .ec-inserting.ec-awaiting { animation:ec-slide-in 0.3s ease-out; opacity:0.5; }' +
+            '.ec-inserting { animation:ec-slide-in 0.6s ease-out; } .ec-inserting.ec-awaiting { animation:ec-slide-in 0.6s ease-out; opacity:0.5; }' +
             '@keyframes ec-count-bump { 0%,100%{transform:scale(1)} 50%{transform:scale(1.3)} }' +
             '.ec-count-bumping { animation:ec-count-bump 0.35s ease; display:inline-block; }' +
             '.ec-c.ec-highlight, .ec-c.reply.ec-highlight { background:rgba(46,204,113,0.12) !important; border-left:3px solid rgba(46,204,113,0.6); transition:background 1s ease-out, border-left-color 1s ease-out; }' +
