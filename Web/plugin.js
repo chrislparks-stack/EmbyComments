@@ -1349,7 +1349,12 @@ define([], function () {
             renderSummary(section, data.summary, data.overallSummary, data.total, data.overallTotal);
 
             if (data.comments.length === 0 && pendingComments.length === 0) {
-                list.innerHTML = '<div class="ec-empty">No comments in this view. Try adjusting your filters.</div>';
+                var hasFilters = languageFilter.length > 0 || serverLocalOnly;
+                var globalTotal = (data.overallTotal != null) ? data.overallTotal : data.total;
+                var emptyMsg = (hasFilters && globalTotal > 0)
+                    ? 'No comments in this view. Try adjusting your filters.'
+                    : 'No comments yet. Be the first!';
+                list.innerHTML = '<div class="ec-empty">' + emptyMsg + '</div>';
                 section.querySelector('#ec-pager').style.display = 'none'; return;
             }
 
