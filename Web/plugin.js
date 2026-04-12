@@ -71,6 +71,10 @@ define([], function () {
 
     function init() {
         if (initRetries >= MAX_INIT_RETRIES) return;
+        if (!ApiClient.getCurrentUserId()) {
+            setTimeout(init, 1000);
+            return;
+        }
         initRetries++;
 
         ApiClient.getJSON(ApiClient.getUrl('communitycomments/config')).then(function (config) {
@@ -118,7 +122,19 @@ define([], function () {
                 initRetries = 0;
                 initResolve();
             }).catch(function () { setTimeout(init, 3000); });
-        }).catch(function () { setTimeout(init, 3000); });
+        }).catch(function (err) {
+            var status = err && (err.status || err.statusCode);
+            if (status === 401) {
+                var userId = ApiClient.getCurrentUserId();
+                ApiClient.getCurrentUser(userId).then(function () {
+                    setTimeout(init, 3000);
+                }).catch(function () {
+                    initRetries = 0;
+                });
+            } else {
+                setTimeout(init, 3000);
+            }
+        });
     }
 
     function refreshConfig() {
@@ -287,6 +303,8 @@ define([], function () {
                 updateFormVisibility(section);
                 applyToolbarState(section);
                 loadComments(section);
+                return warmupListeners();
+            }).then(function () {
                 startBanListener(section);
                 startModerationListener(section);
                 startFeedListener(section);
@@ -344,6 +362,13 @@ define([], function () {
         }
     }
 
+    function warmupListeners() {
+        if (!apiEndpoint || !sessionToken) return Promise.resolve();
+        var url = apiEndpoint + '/ws-warmup?token=' + encodeURIComponent(sessionToken)
+            + (currentMediaKey ? '&mediaKey=' + encodeURIComponent(currentMediaKey) : '');
+        return cfFetch(url).catch(function () {});
+    }
+
     function startBanListener(section) {
         stopBanListener();
         if (!apiEndpoint || !userUuid || !sessionToken) return;
@@ -353,7 +378,7 @@ define([], function () {
             + '&token=' + encodeURIComponent(sessionToken);
 
         banSocket = new WebSocket(wsUrl);
-        banSocketRetries = 0;
+        banSocket.onopen = function () { banSocketRetries = 0; };
 
         banSocket.onmessage = function (event) {
             try {
@@ -379,9 +404,7 @@ define([], function () {
             if (!document.getElementById('communitycomments-section')) return;
             if (banSocketRetries < 3) {
                 banSocketRetries++;
-                refreshToken().then(function () {
-                    startBanListener(section);
-                }).catch(function () {});
+                setTimeout(function () { startBanListener(section); }, 2000 * banSocketRetries);
             }
         };
     }
@@ -537,7 +560,7 @@ define([], function () {
             + '&token=' + encodeURIComponent(sessionToken);
 
         feedSocket = new WebSocket(wsUrl);
-        feedSocketRetries = 0;
+        feedSocket.onopen = function () { feedSocketRetries = 0; };
 
         feedSocket.onmessage = function () {
             fetchAndDiffFeed(section);
@@ -566,7 +589,7 @@ define([], function () {
             + '&token=' + encodeURIComponent(sessionToken);
 
         moderationSocket = new WebSocket(wsUrl);
-        moderationSocketRetries = 0;
+        moderationSocket.onopen = function () { moderationSocketRetries = 0; };
 
         moderationSocket.onmessage = function (event) {
             try {
@@ -580,9 +603,7 @@ define([], function () {
             if (!document.getElementById('communitycomments-section')) return;
             if (moderationSocketRetries < 3) {
                 moderationSocketRetries++;
-                refreshToken().then(function () {
-                    startModerationListener(section);
-                }).catch(function () {});
+                setTimeout(function () { startModerationListener(section); }, 2000 * moderationSocketRetries);
             }
         };
     }
@@ -924,8 +945,8 @@ define([], function () {
             '<textarea class="ec-textarea" id="ec-body" placeholder="Share your thoughts..." maxlength="' + MAX_CHARS + '"></textarea>' +
             '<div class="ec-form-footer"><button class="ec-btn" id="ec-submit">Post</button><label class="ec-spoiler-check" title="Click this tag if your comment reveals plot points, twists, or endings"><input type="checkbox" id="ec-spoiler-cb"> Spoiler</label><span class="ec-char-count" id="ec-char-count">0 / ' + MAX_CHARS + '</span></div></div>' +
             '<div class="ec-toolbar" id="ec-toolbar">' +
-            '<div class="ec-toolbar-group"><label class="ec-toolbar-label">Sort</label><div class="ec-drop-wrap"><button class="ec-toolbar-btn" id="ec-sort-btn">Newest \u25be</button><div class="ec-dropdown" id="ec-sort-dropdown"></div></div></div>' +
-            '<div class="ec-toolbar-group"><label class="ec-toolbar-label">Language</label><div class="ec-drop-wrap"><button class="ec-toolbar-btn" id="ec-lang-btn">All Languages \u25be</button><div class="ec-dropdown" id="ec-lang-dropdown"></div></div></div>' +
+            '<div class="ec-toolbar-group"><span class="ec-toolbar-label">Sort</span><div class="ec-drop-wrap"><button class="ec-toolbar-btn" id="ec-sort-btn">Newest \u25be</button><div class="ec-dropdown" id="ec-sort-dropdown"></div></div></div>' +
+            '<div class="ec-toolbar-group"><span class="ec-toolbar-label">Language</span><div class="ec-drop-wrap"><button class="ec-toolbar-btn" id="ec-lang-btn">All Languages \u25be</button><div class="ec-dropdown" id="ec-lang-dropdown"></div></div></div>' +
             '<button class="ec-censor-btn" id="ec-censor-toggle" type="button">' + WARNING_SVG + ' Censor explicit</button>' +
             '</div>' +
             '<div class="ec-scroll" id="ec-scroll"><div class="ec-list" id="ec-list">' +
@@ -2126,7 +2147,7 @@ define([], function () {
                 ];
                 picker.innerHTML = '<div class="ec-report-title">Report reason:</div>' +
                     reasons.map(function (r) { return '<button class="ec-report-reason" data-reason="' + r.value + '">' + r.label + '</button>'; }).join('') +
-                    '<div class="ec-report-other"><input class="ec-report-other-input" type="text" placeholder="Other reason..." maxlength="100"><button class="ec-report-other-submit">Submit</button></div>';
+                    '<div class="ec-report-other"><input class="ec-report-other-input" type="text" name="ec-report-other" placeholder="Other reason..." maxlength="100"><button class="ec-report-other-submit">Submit</button></div>';
 
                 function submitReport(reason) {
                     cfFetch(apiEndpoint + '/report', {

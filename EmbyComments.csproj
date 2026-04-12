@@ -4,8 +4,8 @@
     <TargetFrameworks>net6.0</TargetFrameworks>
     <AssemblyName>CommunityComments</AssemblyName>
     <RootNamespace>CommunityComments</RootNamespace>
-    <AssemblyVersion>1.0.0.0</AssemblyVersion>
-    <FileVersion>1.0.0.0</FileVersion>
+    <AssemblyVersion>1.0.1.0</AssemblyVersion>
+    <FileVersion>1.0.1.0</FileVersion>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
   </PropertyGroup>
 
@@ -17,6 +17,9 @@
       <EmbeddedResource Include="Configuration\configPage.html" />
       <EmbeddedResource Include="Configuration\configPage.js" />
       <EmbeddedResource Include="Web\plugin.js" />
+      <EmbeddedResource Include="Resources\Community Comments.png">
+          <LogicalName>CommunityComments.thumb.png</LogicalName>
+      </EmbeddedResource>
   </ItemGroup>
 
 </Project>

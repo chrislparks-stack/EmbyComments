@@ -1,14 +1,16 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using CommunityComments.Api;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Common.Plugins;
+using MediaBrowser.Model.Drawing;
 using MediaBrowser.Model.Plugins;
 using MediaBrowser.Model.Serialization;
 
 namespace CommunityComments
 {
-    public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
+    public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IHasThumbImage
     {
         public static Plugin Instance { get; private set; }
         public CommentsApiClient ApiClient { get; private set; }
@@ -24,6 +26,13 @@ namespace CommunityComments
         public override string Description => "Community comments and ratings for movies and TV shows.";
         public override Guid Id => new Guid("a4b7c2d1-e5f6-4a3b-8c9d-0e1f2a3b4c5d");
         public override string ConfigurationFileName => "CommunityComments.xml";
+
+        public ImageFormat ThumbImageFormat => ImageFormat.Png;
+
+        public Stream GetThumbImage()
+        {
+            return GetType().Assembly.GetManifestResourceStream("CommunityComments.thumb.png");
+        }
 
         public IEnumerable<PluginPageInfo> GetPages()
         {

@@ -136,9 +136,10 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
             avatarWrap.dataset.avatarPath = avatarPath;
             avatarWrap.className = 'ec-cfg-avatar';
 
-            var label = document.createElement('div');
+            var label = document.createElement('label');
             label.style.cssText = 'min-width:120px; font-weight:bold; color:inherit;';
             label.textContent = user.Name;
+            label.htmlFor = 'ec-user-name-' + user.Id;
 
             var inputWrap = document.createElement('div');
             inputWrap.className = 'inputContainer';
@@ -146,6 +147,8 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
 
             var input = document.createElement('input');
             input.type = 'text';
+            input.id = 'ec-user-name-' + user.Id;
+            input.name = 'ec-user-name-' + user.Id;
             input.className = 'emby-input';
             input.placeholder = user.Name + ' (default)';
             input.maxLength = MAX_NAME_LENGTH;
