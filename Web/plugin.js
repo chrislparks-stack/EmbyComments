@@ -33,6 +33,8 @@ define([], function () {
     var serverLocalOnly = false;
     var banInfo = null;
     var serverBanInfo = null;
+    var banAppealStatus = null;    // null | { appealStatus: 'pending'|'denied', adminResponse: string|null }
+    var banLiftPendingAck = null;  // null | { reversalMessage: string|null } — set when ban lifted by appeal, cleared after user clicks OK
     var pendingRefresh = null;
     var banSocket = null;
     var banSocketRetries = 0;
@@ -222,6 +224,8 @@ define([], function () {
         userModerationStatus = 'approved';
         banInfo = null;
         serverBanInfo = null;
+        banAppealStatus = null;
+        banLiftPendingAck = null;
         stopBanListener();
         stopModerationListener();
         stopFeedListener();
@@ -331,9 +335,10 @@ define([], function () {
                 currentSort = data.sortPreference || 'newest';
                 languageFilter = data.languageFilter || [];
                 banInfo = data.ban || null;
+                banAppealStatus = data.banAppeal || null;
                 serverBanInfo = data.serverBan || null;
             })
-            .catch(function () { reactionsMap = {}; hiddenSet = {}; reportedSet = {}; userModerationStatus = 'approved'; censorExplicit = false; banInfo = null; serverBanInfo = null; });
+            .catch(function () { reactionsMap = {}; hiddenSet = {}; reportedSet = {}; userModerationStatus = 'approved'; censorExplicit = false; banInfo = null; banAppealStatus = null; serverBanInfo = null; });
     }
 
     function fetchMyPending() {
@@ -394,6 +399,12 @@ define([], function () {
                 } else {
                     var prev = banInfo;
                     banInfo = msg.ban || null;
+                    if (msg.liftedByAppeal) {
+                        banLiftPendingAck = { reversalMessage: msg.reversalMessage || null };
+                        banAppealStatus = null;
+                    } else if (msg.banAppealDenied) {
+                        banAppealStatus = { appealStatus: 'denied', adminResponse: msg.denialReason || null };
+                    }
                     handleBanChange(section, prev);
                 }
             } catch (e) {}
@@ -673,6 +684,14 @@ define([], function () {
             transitionToDenied(el, pending);
             var deniedEl = list.querySelector('.ec-c[data-comment-id="' + commentId + '"]');
             if (deniedEl && scroll) highlightWhenVisible(deniedEl, scroll, true);
+        } else if (msg.status === 'appeal_denied') {
+            // Admin reviewed and denied the appeal — reset to dismissable state
+            pending.AppealStatus = 'denied';
+            pending.AdminResponse = msg.denialReason || null;
+            var newEl = createPendingCommentEl(pending, isReply);
+            if (el.parentNode) el.parentNode.replaceChild(newEl, el);
+            var updatedEl = list.querySelector('.ec-c[data-comment-id="' + commentId + '"]');
+            if (updatedEl && scroll) highlightWhenVisible(updatedEl, scroll, true);
         } else {
             var snapshot = {
                 AuthorDisplayName: pending.AuthorDisplayName || displayName,
@@ -716,18 +735,54 @@ define([], function () {
                 '</div>';
             serverBanWarning.style.display = 'flex';
             formToggle.style.display = 'none';
+        } else if (banLiftPendingAck) {
+            // Ban was lifted by appeal — require acknowledgment before enabling form
+            nameWarning.style.display = 'none';
+            serverBanWarning.style.display = 'none';
+            banWarning.innerHTML =
+                '<div style="display:flex;flex-direction:column;gap:0.4rem;width:100%">' +
+                '<strong>\u2705 Your ban has been lifted.</strong>' +
+                '<span>Please respect the community guidelines going forward.</span>' +
+                (banLiftPendingAck.reversalMessage ? '<em style="opacity:0.8">' + esc(banLiftPendingAck.reversalMessage) + '</em>' : '') +
+                '<button class="ec-ban-lift-ok" style="align-self:flex-start;margin-top:0.25rem">OK</button>' +
+                '</div>';
+            banWarning.style.display = 'flex';
+            formToggle.style.display = 'none';
         } else if (banInfo) {
             nameWarning.style.display = 'none';
             serverBanWarning.style.display = 'none';
-            if (banInfo.isAdmin) {
-                if (banInfo.banType === 'permanent') {
-                    banWarning.innerHTML = WARNING_SVG + ' You have been permanently banned by a comments admin. Reason: ' + esc(banInfo.reason);
+            if (banInfo.banType === 'permanent') {
+                // Build ban message text
+                var banMsgText = banInfo.isAdmin
+                    ? WARNING_SVG + ' You have been permanently banned by a comments admin. Reason: ' + esc(banInfo.reason)
+                    : WARNING_SVG + ' Your account has been permanently banned from posting comments due to repeated violations.';
+                // Append appeal state UI
+                var appealUi = '';
+                if (banAppealStatus && banAppealStatus.appealStatus === 'pending') {
+                    appealUi = '<span class="ec-appeal-pending" title="Your appeal is under review by a moderator.">\u23f3 Appeal submitted</span>';
+                } else if (banAppealStatus && banAppealStatus.appealStatus === 'denied') {
+                    var denialText = banAppealStatus.adminResponse
+                        ? 'Appeal denied: ' + esc(banAppealStatus.adminResponse)
+                        : 'Appeal denied.';
+                    appealUi = '<span style="font-size:0.82em;color:rgba(231,76,60,0.75);font-style:italic">' + denialText + '</span>';
                 } else {
-                    var expiry = new Date(banInfo.expiresAt);
-                    banWarning.innerHTML = WARNING_SVG + ' You have been banned by a comments admin until ' + expiry.toLocaleTimeString() + '. Reason: ' + esc(banInfo.reason);
+                    appealUi =
+                        '<button class="ec-ban-appeal-btn" title="Disagree with this decision? Submit an appeal for moderator review.">\u2197 Appeal</button>' +
+                        '<div class="ec-ban-appeal-form" id="ec-ban-af" style="display:none">' +
+                        '<textarea class="ec-ban-appeal-textarea" placeholder="Describe why you believe this ban should be lifted\u2026" maxlength="1000"></textarea>' +
+                        '<div class="ec-appeal-form-actions">' +
+                        '<button class="ec-ban-appeal-submit">Submit Appeal</button>' +
+                        '<button class="ec-ban-appeal-cancel">Cancel</button>' +
+                        '</div></div>';
                 }
-            } else if (banInfo.banType === 'permanent') {
-                banWarning.innerHTML = WARNING_SVG + ' Your account has been permanently banned from posting comments due to repeated violations.';
+                banWarning.innerHTML =
+                    '<div style="display:flex;flex-direction:column;gap:0.4rem;width:100%">' +
+                    '<div>' + banMsgText + '</div>' +
+                    '<div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap">' + appealUi + '</div>' +
+                    '</div>';
+            } else if (banInfo.isAdmin) {
+                var expiry = new Date(banInfo.expiresAt);
+                banWarning.innerHTML = WARNING_SVG + ' You have been banned by a comments admin until ' + expiry.toLocaleTimeString() + '. Reason: ' + esc(banInfo.reason);
             } else {
                 var expiry = new Date(banInfo.expiresAt);
                 banWarning.innerHTML = WARNING_SVG + ' You are temporarily banned from posting comments until ' + expiry.toLocaleTimeString() + '. Reason: ' + esc(banInfo.reason);
@@ -744,6 +799,51 @@ define([], function () {
             serverBanWarning.style.display = 'none';
             nameWarning.style.display = 'none';
             formToggle.style.display = '';
+        }
+
+        // Wire ban-warning dynamic buttons (re-wired each time innerHTML changes)
+        var liftOkBtn = banWarning.querySelector('.ec-ban-lift-ok');
+        if (liftOkBtn) {
+            liftOkBtn.addEventListener('click', function () {
+                banLiftPendingAck = null;
+                updateFormVisibility(section);
+            });
+        }
+        var banAppealBtn = banWarning.querySelector('.ec-ban-appeal-btn');
+        if (banAppealBtn) {
+            banAppealBtn.addEventListener('click', function () {
+                var form = banWarning.querySelector('#ec-ban-af');
+                if (form) form.style.display = form.style.display === 'none' ? 'block' : 'none';
+            });
+        }
+        var banAppealCancelBtn = banWarning.querySelector('.ec-ban-appeal-cancel');
+        if (banAppealCancelBtn) {
+            banAppealCancelBtn.addEventListener('click', function () {
+                var form = banWarning.querySelector('#ec-ban-af');
+                if (form) form.style.display = 'none';
+            });
+        }
+        var banAppealSubmitBtn = banWarning.querySelector('.ec-ban-appeal-submit');
+        if (banAppealSubmitBtn) {
+            banAppealSubmitBtn.addEventListener('click', function () {
+                var form = banWarning.querySelector('#ec-ban-af');
+                var reason = form ? form.querySelector('.ec-ban-appeal-textarea').value.trim() : '';
+                if (!reason) { if (form) form.querySelector('.ec-ban-appeal-textarea').focus(); return; }
+                banAppealSubmitBtn.disabled = true;
+                cfFetch(apiEndpoint + '/ban-appeal', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ UserUuid: userUuid, reason: reason })
+                }).then(function (r) { return r.json(); }).then(function (data) {
+                    if (data.ok) {
+                        banAppealStatus = { appealStatus: 'pending', adminResponse: null };
+                        updateFormVisibility(section);
+                    } else {
+                        banAppealSubmitBtn.disabled = false;
+                        alert(data.error || 'Failed to submit appeal. Please try again.');
+                    }
+                }).catch(function () { banAppealSubmitBtn.disabled = false; });
+            });
         }
     }
 
@@ -835,6 +935,23 @@ define([], function () {
             '.ec-c.ec-denied { background:rgba(231,76,60,0.06); border-color:rgba(231,76,60,0.15); }' +
             '.ec-denied-body { font-size:0.8em; color:rgba(231,76,60,0.7); line-height:1.4; }' +
             '.ec-denied-reason { font-size:0.78em; color:rgba(231,76,60,0.55); margin-top:3px; font-style:italic; }' +
+            '.ec-appeal-btn { background:none; border:1px solid rgba(155,89,182,0.5); border-radius:4px; color:rgba(155,89,182,0.85); cursor:pointer; font-size:0.72rem; padding:0.15rem 0.45rem; white-space:nowrap; flex-shrink:0; line-height:1; box-sizing:border-box; }' +
+            '.ec-appeal-btn:hover { border-color:rgba(155,89,182,0.9); color:rgba(155,89,182,1); }' +
+            '.ec-ban-appeal-btn { background:none; border:1px solid rgba(155,89,182,0.5); border-radius:4px; color:rgba(155,89,182,0.85); cursor:pointer; font-size:0.78rem; padding:0.2rem 0.6rem; white-space:nowrap; line-height:1; box-sizing:border-box; }' +
+            '.ec-ban-appeal-btn:hover { border-color:rgba(155,89,182,0.9); color:rgba(155,89,182,1); }' +
+            '.ec-ban-appeal-form { margin-top:0.5rem; box-sizing:border-box; }' +
+            '.ec-ban-appeal-textarea { width:100%; max-width:100%; background:rgba(0,0,0,0.3); border:1px solid rgba(155,89,182,0.4); border-radius:4px; color:inherit; font-size:0.82rem; padding:0.3rem 0.4rem; resize:none; height:56px; font-family:inherit; box-sizing:border-box; }' +
+            '.ec-ban-lift-ok { background:rgba(46,213,115,0.15); border:1px solid rgba(46,213,115,0.4); border-radius:4px; color:rgba(46,213,115,0.9); cursor:pointer; font-size:0.82rem; padding:0.25rem 0.9rem; }' +
+            '.ec-ban-lift-ok:hover { background:rgba(46,213,115,0.25); }' +
+            '.ec-dismiss-denial { background:none; border:1px solid rgba(231,76,60,0.4); border-radius:4px; color:rgba(231,76,60,0.7); cursor:pointer; font-size:0.72rem; padding:0.15rem 0.4rem; white-space:nowrap; flex-shrink:0; line-height:1; box-sizing:border-box; }' +
+            '.ec-dismiss-denial:hover { border-color:rgba(231,76,60,0.7); color:rgba(231,76,60,1); }' +
+            '.ec-appeal-pending { font-size:0.72rem; color:rgba(155,89,182,0.8); white-space:nowrap; flex-shrink:0; }' +
+            '.ec-appeal-form { margin-top:0.5rem; display:none; box-sizing:border-box; overflow:hidden; }' +
+            '.ec-appeal-form.open { display:block; }' +
+            '.ec-appeal-form textarea { width:100%; max-width:100%; background:rgba(0,0,0,0.3); border:1px solid rgba(155,89,182,0.4); border-radius:4px; color:inherit; font-size:0.78rem; padding:0.3rem 0.4rem; resize:none; height:52px; font-family:inherit; box-sizing:border-box; }' +
+            '.ec-appeal-form-actions { display:flex; gap:0.4rem; margin-top:0.3rem; }' +
+            '.ec-appeal-submit { background:rgba(155,89,182,0.2); border:1px solid rgba(155,89,182,0.5); border-radius:4px; color:rgba(155,89,182,0.9); cursor:pointer; font-size:0.78rem; padding:0.25rem 0.7rem; }' +
+            '.ec-appeal-cancel { background:none; border:1px solid rgba(255,255,255,0.15); border-radius:4px; color:rgba(255,255,255,0.5); cursor:pointer; font-size:0.78rem; padding:0.25rem 0.7rem; }' +
             '.ec-spoiler-wrap { position:relative; cursor:pointer; }' +
             '.ec-spoiler-wrap .ec-c-text { filter:blur(5px); user-select:none; transition:filter 0.3s; }' +
             '.ec-spoiler-wrap.ec-revealed .ec-c-text { filter:none; user-select:auto; cursor:auto; }' +
@@ -1377,20 +1494,47 @@ define([], function () {
 
         if (c.ModerationStatus === 'denied') {
             div.classList.add('ec-denied');
+            var appealPending  = c.AppealStatus === 'pending';
+            var appealDenied   = c.AppealStatus === 'denied';
+            // Buttons row: differs by appeal state
+            var buttonsHtml;
+            if (appealPending) {
+                buttonsHtml = '<span class="ec-appeal-pending" title="Your appeal is under review by a moderator. You\u2019ll be notified of the decision.">\u23f3 Appeal submitted</span>';
+            } else {
+                buttonsHtml =
+                    (appealDenied ? '' :
+                        '<button class="ec-appeal-btn" data-id="' + esc(c.CommentId) + '" title="Disagree with this decision? Submit an appeal and a moderator will review your comment.">\u2197 Appeal</button> ') +
+                    '<button class="ec-dismiss-denial" data-id="' + esc(c.CommentId) + '" title="Remove this notification from your feed">\u00d7 Dismiss</button>';
+            }
+            var deniedBadgeTitle = appealDenied
+                ? 'A moderator reviewed your appeal and upheld the original decision.'
+                : 'This comment was flagged and did not meet community guidelines.';
+            var deniedBadgeHtml = appealDenied
+                ? '<div class="ec-denied-body" title="' + deniedBadgeTitle + '">' + WARNING_SVG + ' Appeal denied' +
+                  (c.AdminResponse ? '<span class="ec-denied-reason" style="margin-left:0.5rem;font-style:italic">' + esc(c.AdminResponse) + '</span>' : '') +
+                  '</div>'
+                : '<div class="ec-denied-body" title="' + deniedBadgeTitle + '">' + WARNING_SVG + ' Comment denied</div>';
             div.innerHTML =
                 renderAvatar(name, c.AvatarBlob, 'opacity:0.5;') +
                 '<div class="ec-c-body">' +
                 '<div class="ec-c-top"><span class="ec-c-author" style="opacity:0.5;">' + esc(name) + '</span>' +
                 (c.StarRating ? '<span class="ec-c-rating">\u2605 ' + c.StarRating + '/10</span>' : '') +
                 '<span class="ec-c-date">' + formatDate(c.CreatedAt) + '</span></div>' +
-                '<div class="ec-denied-body">' + WARNING_SVG + ' Comment denied</div>' +
+                deniedBadgeHtml +
                 '<div style="display:flex;align-items:center;gap:0.5rem;margin-top:0.2rem">' +
                 '<span class="ec-denied-reason" style="flex:1;margin-top:0">' + esc(c.DenialReason || 'Did not meet community guidelines') + '</span>' +
-                '<button class="ec-dismiss-denial" data-id="' + esc(c.CommentId) + '" ' +
-                'title="Remove this notification from your feed" ' +
-                'style="background:none;border:1px solid rgba(231,76,60,0.4);border-radius:4px;color:rgba(231,76,60,0.7);cursor:pointer;font-size:0.72rem;padding:0.15rem 0.4rem;white-space:nowrap;flex-shrink:0">\u00d7 Dismiss</button>' +
+                buttonsHtml +
                 '</div>' +
+                (appealPending ? '' :
+                    '<div class="ec-appeal-form" id="ec-af-' + esc(c.CommentId) + '">' +
+                    '<textarea class="ec-appeal-textarea" placeholder="Describe why you believe this comment should be approved\u2026" maxlength="1000"></textarea>' +
+                    '<div class="ec-appeal-form-actions">' +
+                    '<button class="ec-appeal-submit" data-id="' + esc(c.CommentId) + '">Submit Appeal</button>' +
+                    '<button class="ec-appeal-cancel" data-id="' + esc(c.CommentId) + '">Cancel</button>' +
+                    '</div></div>') +
                 '</div>';
+
+            // Dismiss button
             var dismissBtn = div.querySelector('.ec-dismiss-denial');
             if (dismissBtn) {
                 dismissBtn.addEventListener('click', function () {
@@ -1403,10 +1547,69 @@ define([], function () {
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ UserUuid: userUuid })
                     }).then(function () {
-                        // Reload so an admin-approved reversal becomes visible in the main feed
                         var sec = card ? card.closest('.ec-section') : null;
                         if (sec) loadComments(sec, true);
                     }).catch(function () {});
+                });
+            }
+
+            // Appeal button — toggle the inline form
+            var appealBtn = div.querySelector('.ec-appeal-btn');
+            if (appealBtn) {
+                appealBtn.addEventListener('click', function () {
+                    var formEl = document.getElementById('ec-af-' + this.dataset.id);
+                    if (formEl) formEl.classList.toggle('open');
+                });
+            }
+
+            // Appeal cancel
+            var appealCancelBtn = div.querySelector('.ec-appeal-cancel');
+            if (appealCancelBtn) {
+                appealCancelBtn.addEventListener('click', function () {
+                    var formEl = document.getElementById('ec-af-' + this.dataset.id);
+                    if (formEl) formEl.classList.remove('open');
+                });
+            }
+
+            // Appeal submit
+            var appealSubmitBtn = div.querySelector('.ec-appeal-submit');
+            if (appealSubmitBtn) {
+                appealSubmitBtn.addEventListener('click', function () {
+                    var commentId = this.dataset.id;
+                    var formEl = document.getElementById('ec-af-' + commentId);
+                    if (!formEl) return;
+                    var reason = formEl.querySelector('.ec-appeal-textarea').value.trim();
+                    if (!reason) { formEl.querySelector('.ec-appeal-textarea').focus(); return; }
+                    var btn = this;
+                    btn.disabled = true;
+                    cfFetch(apiEndpoint + '/appeal/' + encodeURIComponent(commentId), {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ UserUuid: userUuid, reason: reason })
+                    }).then(function (r) { return r.json(); }).then(function (data) {
+                        if (data.ok) {
+                            // Update local pending state and re-render
+                            var updatedPending = null;
+                            for (var i = 0; i < pendingComments.length; i++) {
+                                if (pendingComments[i].CommentId === commentId) {
+                                    pendingComments[i].AppealStatus = 'pending';
+                                    updatedPending = pendingComments[i];
+                                    break;
+                                }
+                            }
+                            var card = div;
+                            var newEl = createPendingCommentEl(
+                                updatedPending || Object.assign({}, c, { AppealStatus: 'pending' }),
+                                isReply
+                            );
+                            if (card.parentNode) card.parentNode.replaceChild(newEl, card);
+                        } else {
+                            btn.disabled = false;
+                            alert(data.error || 'Failed to submit appeal. Please try again.');
+                        }
+                    }).catch(function () {
+                        btn.disabled = false;
+                    });
                 });
             }
         } else {
@@ -2322,12 +2525,13 @@ define([], function () {
 
     function formatDate(ds) {
         if (!ds) return '';
-        var diff = Date.now() - new Date(ds), m = Math.floor(diff / 60000);
-        if (m < 1) return 'now'; if (m < 60) return m + 'm';
+        var date = new Date(ds);
+        var diff = Date.now() - date, m = Math.floor(diff / 60000);
+        if (m < 1) return 'now';
+        if (m < 60) return m + 'm';
         var h = Math.floor(m / 60); if (h < 24) return h + 'h';
-        var d = Math.floor(h / 24); if (d < 30) return d + 'd';
-        var mo = Math.floor(d / 30); if (mo < 12) return mo + 'mo';
-        return Math.floor(mo / 12) + 'y';
+        var d = Math.floor(h / 24); if (d < 7) return d + 'd';
+        return date.toLocaleDateString();
     }
 
     function transitionToApproved(el, snapshot, section, list) {
