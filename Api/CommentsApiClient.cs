@@ -72,6 +72,53 @@ namespace CommunityComments.Api
             return body;
         }
 
+        /// <summary>
+        /// Calls POST /server/ban-status with server credentials.
+        /// Returns raw JSON: { banned, banReason, appealStatus, appealReason, appealResponse, appealCreatedAt }
+        /// </summary>
+        public async Task<string> GetServerBanStatusAsync()
+        {
+            var url = $"{ApiEndpoint}/server/ban-status";
+            var payload = new
+            {
+                ServerGuid = ServerGuid,
+                WanAddress = WanAddress,
+                ApiKey = EmbyApiKey
+            };
+            var json = JsonSerializer.Serialize(payload, _jsonOptions);
+            var content = new StringContent(json, Encoding.UTF8, "application/json");
+
+            var response = await _httpClient.PostAsync(url, content);
+            var body = await response.Content.ReadAsStringAsync();
+            if (!response.IsSuccessStatusCode)
+                throw new HttpRequestException($"Worker /server/ban-status returned {(int)response.StatusCode}: {body}");
+            return body;
+        }
+
+        /// <summary>
+        /// Calls POST /server-ban-appeal with server credentials and the appeal reason.
+        /// Returns raw JSON: { ok } or { error }
+        /// </summary>
+        public async Task<string> ServerBanAppealAsync(string reason)
+        {
+            var url = $"{ApiEndpoint}/server-ban-appeal";
+            var payload = new
+            {
+                ServerGuid = ServerGuid,
+                WanAddress = WanAddress,
+                ApiKey = EmbyApiKey,
+                reason = reason
+            };
+            var json = JsonSerializer.Serialize(payload, _jsonOptions);
+            var content = new StringContent(json, Encoding.UTF8, "application/json");
+
+            var response = await _httpClient.PostAsync(url, content);
+            var body = await response.Content.ReadAsStringAsync();
+            if (!response.IsSuccessStatusCode)
+                throw new HttpRequestException($"Worker /server-ban-appeal returned {(int)response.StatusCode}: {body}");
+            return body;
+        }
+
         public async Task<string> RegisterNameAsync(string userKey, string displayName, bool checkOnly = false)
         {
             var url = $"{ApiEndpoint}/register";

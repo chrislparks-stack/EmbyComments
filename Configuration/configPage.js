@@ -338,38 +338,27 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
         } else if (ev.Action === 'comment.report') {
             subtext = (detail.newReportCount || 3) + ' reports' + (detail.reason ? ' — ' + escHtml(detail.reason) : '');
         } else if (ev.Action === 'admin.server_ban') {
-            nameHtml = '';
-            var banReason = escHtml(detail.reason || '');
-            var banRow = document.createElement('div');
-            banRow.style.cssText = 'padding:0.75em 0.9em; border-bottom:1px solid var(--theme-border-color,#333); background:rgba(231,76,60,0.15); border-left:4px solid #e74c3c;';
-            var infoSvg = '<svg viewBox="0 0 24 24" width="13" height="13" style="vertical-align:-1px;"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>';
-            banRow.innerHTML =
-                '<div style="display:flex;align-items:center;gap:0.5em;margin-bottom:0.3em;">' +
-                  '<span style="font-size:1.2em;">🔴</span>' +
-                  '<strong style="color:#e74c3c;font-size:0.9em;letter-spacing:0.03em;">SERVER BANNED</strong>' +
-                  '<button class="ec-feed-info-btn" style="background:none;border:none;color:#e74c3c;cursor:pointer;opacity:0.65;padding:0 0.25em;line-height:1;" title="What does this mean?">' + infoSvg + '</button>' +
+            var block = document.createElement('div');
+            block.style.cssText = 'background:rgba(231,76,60,0.15); border-left:4px solid #e74c3c; border-radius:4px; padding:0.75em 1em; margin:0.4em 0;';
+            block.innerHTML =
+                '<div style="display:flex; align-items:center; gap:0.5em;">' +
+                  '<span>🔴</span>' +
+                  '<strong style="color:#e74c3c; font-size:0.95em;">SERVER BANNED</strong>' +
+                  (detail.reason ? '<span style="color:var(--theme-text-color-secondary,#aaa); font-size:0.85em;"> — ' + escHtml(detail.reason) + '</span>' : '') +
                 '</div>' +
-                '<div class="ec-feed-ban-detail" style="display:none;font-size:0.8em;color:var(--theme-text-color,#ddd);margin-bottom:0.25em;padding:0.45em 0.6em;background:rgba(231,76,60,0.08);border-radius:4px;line-height:1.5;">All users on this server are blocked from posting comments, replies, or reactions. The server admin can see this event in their activity feed.</div>' +
-                (banReason ? '<div style="font-size:0.85em;color:var(--theme-text-color,#ddd);margin-bottom:0.25em;"><span style="color:#e74c3c;font-weight:600;">Reason:</span> ' + banReason + '</div>' : '') +
-                '<div style="font-size:0.75em;color:var(--theme-text-color-secondary,#aaa);">' + formatFeedTime(ev.CreatedAt) + '</div>';
-            banRow.querySelector('.ec-feed-info-btn').addEventListener('click', function () {
-                var d = banRow.querySelector('.ec-feed-ban-detail');
-                if (d) d.style.display = d.style.display === 'none' ? 'block' : 'none';
-            });
-            return banRow;
+                '<div style="font-size:0.75em; color:var(--theme-text-color-secondary,#aaa); margin-top:0.4em;">' + formatFeedTime(ev.CreatedAt) + '</div>';
+            return block;
         } else if (ev.Action === 'admin.server_unban') {
-            nameHtml = '';
-            var unbanMessage = escHtml(detail.message || '');
-            var unbanRow = document.createElement('div');
-            unbanRow.style.cssText = 'padding:0.6em 0.9em; border-bottom:1px solid var(--theme-border-color,#333); background:rgba(46,204,113,0.08); border-left:4px solid #2ecc71;';
-            unbanRow.innerHTML =
-                '<div style="display:flex;align-items:center;gap:0.5em;margin-bottom:0.2em;">' +
-                  '<span style="font-size:1.1em;">🟢</span>' +
-                  '<strong style="color:#2ecc71;font-size:0.88em;">Server reinstated</strong>' +
+            var unbanBlock = document.createElement('div');
+            unbanBlock.style.cssText = 'background:rgba(46,204,113,0.08); border-left:4px solid #2ecc71; border-radius:4px; padding:0.6em 1em; margin:0.4em 0;';
+            unbanBlock.innerHTML =
+                '<div style="display:flex; align-items:center; gap:0.5em;">' +
+                  '<span>🟢</span>' +
+                  '<strong style="color:#2ecc71; font-size:0.9em;">Server reinstated</strong>' +
+                  (detail.message ? '<span style="color:var(--theme-text-color-secondary,#aaa); font-size:0.85em;"> — ' + escHtml(detail.message) + '</span>' : '') +
                 '</div>' +
-                (unbanMessage ? '<div style="font-size:0.85em;color:var(--theme-text-color,#ddd);margin-bottom:0.2em;"><span style="color:#2ecc71;font-weight:600;">Message:</span> ' + unbanMessage + '</div>' : '') +
-                '<div style="font-size:0.75em;color:var(--theme-text-color-secondary,#aaa);">' + formatFeedTime(ev.CreatedAt) + '</div>';
-            return unbanRow;
+                '<div style="font-size:0.75em; color:var(--theme-text-color-secondary,#aaa); margin-top:0.3em;">' + formatFeedTime(ev.CreatedAt) + '</div>';
+            return unbanBlock;
         }
 
         var previewHtml = ev.CommentPreview
@@ -395,6 +384,175 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
 
     function escHtml(str) {
         return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    function loadServerBanStatus(instance) {
+        var view = instance.view;
+        var banner = view.querySelector('.ecServerBanBanner');
+        if (!banner) return;
+
+        ApiClient.ajax({ type: 'GET', url: ApiClient.getUrl('communitycomments/server-ban-status'), dataType: 'json' })
+            .then(function (data) {
+                if (data.error || !data.banned) {
+                    banner.style.display = 'none';
+                    return;
+                }
+                renderServerBanBanner(instance, data);
+            })
+            .catch(function () {
+                banner.style.display = 'none';
+            });
+    }
+
+    var BAN_INFO_HTML =
+        '<div class="ecSrvBanInfoPanel" style="display:none;margin-top:0.65em;font-size:0.83em;' +
+        'color:var(--theme-text-color-secondary,#aaa);background:rgba(0,0,0,0.18);' +
+        'border-radius:4px;padding:0.6em 0.75em;line-height:1.5;">' +
+        'While suspended, <strong style="color:#e0e0e0">all users on this server are unable to post comments, reply, or interact</strong> with ' +
+        'any content in the Community Comments network. Additionally, all existing comments from this server\'s users ' +
+        'are hidden network-wide — users on other servers will not see them. ' +
+        'The suspension reason above describes the specific violation that led to this action. ' +
+        'Submit an appeal below if you believe this action was made in error.' +
+        '</div>';
+
+    function makeBanInfoToggle() {
+        var btn = document.createElement('button');
+        btn.textContent = '▸ What does this mean?';
+        btn.style.cssText = 'display:block;background:none;border:none;color:rgba(180,180,180,0.65);cursor:pointer;font-size:0.8em;padding:0;margin-top:0.5em;text-align:left;';
+        btn.addEventListener('click', function () {
+            var panel = btn.parentElement.querySelector('.ecSrvBanInfoPanel');
+            if (panel) {
+                var open = panel.style.display !== 'none';
+                panel.style.display = open ? 'none' : 'block';
+                btn.textContent = (open ? '▸' : '▾') + ' What does this mean?';
+            }
+        });
+        return btn;
+    }
+
+    function renderServerBanBanner(instance, status) {
+        var view = instance.view;
+        var banner = view.querySelector('.ecServerBanBanner');
+        if (!banner) return;
+
+        var appealStatus = status.appealStatus || null;
+        var appealResponse = status.appealResponse || null;
+        var banReason = status.banReason || 'No reason provided';
+
+        if (appealStatus === 'pending') {
+            banner.style.background = 'rgba(230,126,34,0.12)';
+            banner.style.border = '1px solid rgba(230,126,34,0.4)';
+            var pendingDiv = document.createElement('div');
+            pendingDiv.innerHTML =
+                '<div style="display:flex;align-items:flex-start;gap:0.75em;">' +
+                '<span style="font-size:1.1em;flex-shrink:0;">⚠️</span>' +
+                '<div style="flex:1">' +
+                '<strong style="color:rgba(230,126,34,0.95)">This server has been suspended.</strong>' +
+                '<div style="font-size:0.88em;color:rgba(230,126,34,0.8);margin-top:0.25em">' +
+                'Reason: ' + escHtml(banReason) + '</div>' +
+                '<div style="font-size:0.85em;color:rgba(230,126,34,0.75);margin-top:0.5em">' +
+                '⏳ Appeal submitted — awaiting moderator review</div>' +
+                BAN_INFO_HTML +
+                '</div></div>';
+            pendingDiv.querySelector('.ecSrvBanInfoPanel').before(makeBanInfoToggle());
+            banner.innerHTML = '';
+            banner.appendChild(pendingDiv);
+            banner.style.display = 'block';
+        } else if (appealStatus === 'denied') {
+            banner.style.background = 'rgba(192,57,43,0.12)';
+            banner.style.border = '1px solid rgba(192,57,43,0.4)';
+            var deniedDiv = document.createElement('div');
+            deniedDiv.innerHTML =
+                '<div style="display:flex;align-items:flex-start;gap:0.75em;">' +
+                '<span style="font-size:1.1em;flex-shrink:0;">🚫</span>' +
+                '<div style="flex:1">' +
+                '<strong style="color:rgba(231,76,60,0.95)">This server has been suspended.</strong>' +
+                '<div style="font-size:0.88em;color:rgba(231,76,60,0.8);margin-top:0.25em">' +
+                'Reason: ' + escHtml(banReason) + '</div>' +
+                (appealResponse
+                    ? '<div style="font-size:0.85em;color:rgba(231,76,60,0.75);margin-top:0.5em">' +
+                      'Appeal denied: ' + escHtml(appealResponse) + '</div>'
+                    : '<div style="font-size:0.85em;color:rgba(231,76,60,0.7);margin-top:0.5em">Your appeal was denied.</div>') +
+                BAN_INFO_HTML +
+                '</div></div>';
+            deniedDiv.querySelector('.ecSrvBanInfoPanel').before(makeBanInfoToggle());
+            banner.innerHTML = '';
+            banner.appendChild(deniedDiv);
+            banner.style.display = 'block';
+        } else {
+            // No appeal submitted yet
+            banner.style.background = 'rgba(192,57,43,0.12)';
+            banner.style.border = '1px solid rgba(192,57,43,0.4)';
+            var noAppealDiv = document.createElement('div');
+            noAppealDiv.innerHTML =
+                '<div style="display:flex;align-items:flex-start;gap:0.75em;">' +
+                '<span style="font-size:1.1em;flex-shrink:0;">🚫</span>' +
+                '<div style="flex:1">' +
+                '<strong style="color:rgba(231,76,60,0.95)">This server has been suspended.</strong>' +
+                '<div style="font-size:0.88em;color:rgba(231,76,60,0.8);margin-top:0.25em">' +
+                'Reason: ' + escHtml(banReason) + '</div>' +
+                BAN_INFO_HTML +
+                '<div style="margin-top:0.75em">' +
+                '<button class="ecSrvBanAppealBtn" style="background:none;border:1px solid rgba(155,89,182,0.5);border-radius:4px;color:rgba(178,133,216,0.9);cursor:pointer;font-size:0.82rem;padding:0.25rem 0.75rem;">' +
+                '↗ Appeal</button>' +
+                '</div>' +
+                '<div class="ecSrvBanAppealForm" style="display:none;margin-top:0.75em">' +
+                '<textarea class="ecSrvBanAppealTextarea" placeholder="Explain why this suspension should be lifted…" maxlength="1000" ' +
+                'style="width:100%;background:rgba(0,0,0,0.2);border:1px solid rgba(155,89,182,0.3);border-radius:6px;color:#e0e0e0;font-size:0.85rem;padding:0.5rem;resize:none;height:72px;box-sizing:border-box;"></textarea>' +
+                '<div style="display:flex;gap:0.5em;margin-top:0.5em;">' +
+                '<button class="ecSrvBanAppealSubmit" style="background:rgba(155,89,182,0.2);border:1px solid rgba(155,89,182,0.5);border-radius:4px;color:rgba(178,133,216,0.9);cursor:pointer;font-size:0.82rem;padding:0.3rem 0.9rem;">Submit Appeal</button>' +
+                '<button class="ecSrvBanAppealCancel" style="background:rgba(0,0,0,0.2);border:1px solid rgba(255,255,255,0.15);border-radius:4px;color:#aaa;cursor:pointer;font-size:0.82rem;padding:0.3rem 0.75rem;">Cancel</button>' +
+                '<span class="ecSrvBanAppealMsg" style="font-size:0.82rem;align-self:center;"></span>' +
+                '</div></div>' +
+                '</div></div>';
+            noAppealDiv.querySelector('.ecSrvBanInfoPanel').before(makeBanInfoToggle());
+            banner.innerHTML = '';
+            banner.appendChild(noAppealDiv);
+            banner.style.display = 'block';
+
+            // Wire buttons
+            var appealBtn = banner.querySelector('.ecSrvBanAppealBtn');
+            var appealForm = banner.querySelector('.ecSrvBanAppealForm');
+            var submitBtn = banner.querySelector('.ecSrvBanAppealSubmit');
+            var cancelBtn = banner.querySelector('.ecSrvBanAppealCancel');
+            var msgEl = banner.querySelector('.ecSrvBanAppealMsg');
+
+            appealBtn.addEventListener('click', function () {
+                appealForm.style.display = appealForm.style.display === 'none' ? 'block' : 'none';
+            });
+            cancelBtn.addEventListener('click', function () {
+                appealForm.style.display = 'none';
+            });
+            submitBtn.addEventListener('click', function () {
+                var reason = banner.querySelector('.ecSrvBanAppealTextarea').value.trim();
+                if (!reason) { msgEl.textContent = 'Please provide a reason.'; msgEl.style.color = '#e74c3c'; return; }
+                submitBtn.disabled = true;
+                submitBtn.textContent = 'Submitting…';
+                msgEl.textContent = '';
+                ApiClient.ajax({
+                    type: 'POST',
+                    url: ApiClient.getUrl('communitycomments/server-ban-appeal'),
+                    dataType: 'json',
+                    contentType: 'application/json',
+                    data: JSON.stringify({ Reason: reason })
+                }).then(function (data) {
+                    if (data.ok) {
+                        status.appealStatus = 'pending';
+                        renderServerBanBanner(instance, status);
+                    } else {
+                        submitBtn.disabled = false;
+                        submitBtn.textContent = 'Submit Appeal';
+                        msgEl.textContent = data.error || 'Failed to submit.';
+                        msgEl.style.color = '#e74c3c';
+                    }
+                }).catch(function () {
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = 'Submit Appeal';
+                    msgEl.textContent = 'Network error. Please try again.';
+                    msgEl.style.color = '#e74c3c';
+                });
+            });
+        }
     }
 
     function loadActivityFeed(instance, cursor, append) {
@@ -440,11 +598,48 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
         stopFeedRefresh(instance);
         instance.feedTimer = setInterval(function () {
             loadActivityFeed(instance, null, false);
+            loadServerBanStatus(instance);
         }, FEED_REFRESH_INTERVAL);
     }
 
     function stopFeedRefresh(instance) {
         if (instance.feedTimer) { clearInterval(instance.feedTimer); instance.feedTimer = null; }
+    }
+
+    function startBanNotifySocket(instance, userUuid, token) {
+        stopBanNotifySocket(instance);
+        if (!instance.apiEndpoint) return;
+        var wsUrl = instance.apiEndpoint.replace(/^https:\/\//, 'wss://').replace(/^http:\/\//, 'ws://')
+            + '/ban-ws?userUuid=' + encodeURIComponent(userUuid)
+            + '&token=' + encodeURIComponent(token);
+        var ws = new WebSocket(wsUrl);
+        ws.onmessage = function (event) {
+            try {
+                var msg = JSON.parse(event.data);
+                if (Object.prototype.hasOwnProperty.call(msg, 'serverBan')) {
+                    loadServerBanStatus(instance);
+                    loadActivityFeed(instance, null, false);
+                }
+            } catch (_) {}
+        };
+        ws.onclose = function () {
+            if (instance.banNotifySocket === ws) {
+                instance.banNotifySocket = null;
+                setTimeout(function () {
+                    if (!instance.banNotifySocket) startBanNotifySocket(instance, userUuid, token);
+                }, 5000);
+            }
+        };
+        instance.banNotifySocket = ws;
+    }
+
+    function stopBanNotifySocket(instance) {
+        if (instance.banNotifySocket) {
+            var ws = instance.banNotifySocket;
+            instance.banNotifySocket = null;
+            ws.onclose = null;
+            ws.close();
+        }
     }
 
     function loadConfig(instance) {
@@ -486,7 +681,25 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
                         var feedSection = view.querySelector('.ecActivityFeedSection');
                         if (feedSection) feedSection.style.display = '';
                         loadActivityFeed(instance, null, false);
+                        loadServerBanStatus(instance);
                         startFeedRefresh(instance);
+
+                        // Open WebSocket so ban status updates instantly when an appeal is resolved
+                        var serverId = ApiClient.serverId();
+                        var userKey = serverId + ':' + currentUser.Id;
+                        var displayName = currentUser.Name;
+                        ApiClient.ajax({
+                            type: 'POST',
+                            url: ApiClient.getUrl('communitycomments/init'),
+                            dataType: 'json',
+                            contentType: 'application/json',
+                            data: JSON.stringify({ UserKey: userKey, DisplayName: displayName })
+                        }).then(function (tokenData) {
+                            var userUuid = tokenData && (tokenData.UserUuid || tokenData.userUuid);
+                            if (userUuid && tokenData.token) {
+                                startBanNotifySocket(instance, userUuid, tokenData.token);
+                            }
+                        }).catch(function () {});
                     }
 
                     loading.hide();
@@ -578,6 +791,7 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
         this.feedTimer = null;
         this.feedCursor = null;
         this.feedLoaded = false;
+        this.banNotifySocket = null;
         var instance = this;
         view.querySelector('form').addEventListener('submit', function (e) { onSubmit(instance, e); });
         var chkLocal = view.querySelector('#chkServerLocalOnly');
@@ -606,6 +820,7 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
         BaseView.prototype.onPause.apply(this, arguments);
         if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; }
         stopFeedRefresh(this);
+        stopBanNotifySocket(this);
         this.feedCursor = null;
         this.feedLoaded = false;
         setLoading(this.view);

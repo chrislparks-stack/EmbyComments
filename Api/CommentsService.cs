@@ -33,6 +33,15 @@ namespace CommunityComments.Api
         public int Limit { get; set; }
     }
 
+    [Route("/communitycomments/server-ban-status", "GET", Summary = "Get server ban and appeal status (admin only)")]
+    public class GetServerBanStatus : IReturn<object> { }
+
+    [Route("/communitycomments/server-ban-appeal", "POST", Summary = "Submit an appeal for a server ban (admin only)")]
+    public class PostServerBanAppeal : IReturn<object>
+    {
+        public string Reason { get; set; }
+    }
+
     public class CommentsService : IService, IRequiresRequest
     {
         private readonly IAuthorizationContext _authContext;
@@ -304,6 +313,72 @@ namespace CommunityComments.Api
             catch (Exception ex)
             {
                 return new { error = "Failed to fetch activity feed: " + ex.Message };
+            }
+        }
+
+        /// <summary>
+        /// Fetches this server's ban and appeal status from the Worker. Admin only.
+        /// </summary>
+        public async Task<object> Get(GetServerBanStatus request)
+        {
+            var authInfo = _authContext.GetAuthorizationInfo(Request);
+            if (authInfo?.User == null || !authInfo.User.Policy.IsAdministrator)
+                return new { error = "Admin access required" };
+
+            var config = Plugin.Instance.Configuration;
+            if (string.IsNullOrEmpty(config.EmbyApiKey) || string.IsNullOrEmpty(config.WanAddress))
+                return new { error = "Plugin is not yet configured. An admin must log in first." };
+
+            try
+            {
+                var json = await Plugin.Instance.ApiClient.GetServerBanStatusAsync();
+                using var doc = JsonDocument.Parse(json);
+                var root = doc.RootElement;
+                return new
+                {
+                    banned          = root.TryGetProperty("banned",          out var b)     && b.ValueKind     == JsonValueKind.True,
+                    banReason       = root.TryGetProperty("banReason",       out var br)    && br.ValueKind    == JsonValueKind.String ? br.GetString()    : null,
+                    appealStatus    = root.TryGetProperty("appealStatus",    out var astat) && astat.ValueKind == JsonValueKind.String ? astat.GetString() : null,
+                    appealReason    = root.TryGetProperty("appealReason",    out var ar)    && ar.ValueKind    == JsonValueKind.String ? ar.GetString()    : null,
+                    appealResponse  = root.TryGetProperty("appealResponse",  out var aresp) && aresp.ValueKind == JsonValueKind.String ? aresp.GetString() : null,
+                    appealCreatedAt = root.TryGetProperty("appealCreatedAt", out var acat)  && acat.ValueKind  == JsonValueKind.String ? acat.GetString()  : null
+                };
+            }
+            catch (Exception ex)
+            {
+                return new { error = "Failed to fetch server ban status: " + ex.Message };
+            }
+        }
+
+        /// <summary>
+        /// Submits an appeal for this server's ban. Admin only.
+        /// </summary>
+        public async Task<object> Post(PostServerBanAppeal request)
+        {
+            var authInfo = _authContext.GetAuthorizationInfo(Request);
+            if (authInfo?.User == null || !authInfo.User.Policy.IsAdministrator)
+                return new { error = "Admin access required" };
+
+            if (string.IsNullOrEmpty(request.Reason?.Trim()))
+                return new { error = "Reason is required" };
+
+            var config = Plugin.Instance.Configuration;
+            if (string.IsNullOrEmpty(config.EmbyApiKey) || string.IsNullOrEmpty(config.WanAddress))
+                return new { error = "Plugin is not yet configured. An admin must log in first." };
+
+            try
+            {
+                var json = await Plugin.Instance.ApiClient.ServerBanAppealAsync(request.Reason.Trim());
+                using var doc = JsonDocument.Parse(json);
+                var root = doc.RootElement;
+                if (root.TryGetProperty("ok", out var ok) && ok.ValueKind == JsonValueKind.True)
+                    return new { ok = true };
+                var errMsg = root.TryGetProperty("error", out var e) && e.ValueKind == JsonValueKind.String ? e.GetString() : "Unknown error";
+                return new { error = errMsg };
+            }
+            catch (Exception ex)
+            {
+                return new { error = "Failed to submit server ban appeal: " + ex.Message };
             }
         }
 

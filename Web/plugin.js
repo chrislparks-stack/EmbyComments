@@ -336,9 +336,10 @@ define([], function () {
                 languageFilter = data.languageFilter || [];
                 banInfo = data.ban || null;
                 banAppealStatus = data.banAppeal || null;
+                banLiftPendingAck = data.banLiftAckPending || null;
                 serverBanInfo = data.serverBan || null;
             })
-            .catch(function () { reactionsMap = {}; hiddenSet = {}; reportedSet = {}; userModerationStatus = 'approved'; censorExplicit = false; banInfo = null; banAppealStatus = null; serverBanInfo = null; });
+            .catch(function () { reactionsMap = {}; hiddenSet = {}; reportedSet = {}; userModerationStatus = 'approved'; censorExplicit = false; banInfo = null; banAppealStatus = null; banLiftPendingAck = null; serverBanInfo = null; });
     }
 
     function fetchMyPending() {
@@ -358,11 +359,15 @@ define([], function () {
         updateFormVisibility(section);
 
         if (banInfo) {
+            // Close main comment form if open
+            var mainForm = section.querySelector('#ec-form');
+            if (mainForm) mainForm.classList.remove('open');
             var toggles = section.querySelectorAll('.ec-reply-toggle');
             for (var i = 0; i < toggles.length; i++) toggles[i].style.display = 'none';
             var openReplies = section.querySelectorAll('.ec-reply-inline.open');
             for (var j = 0; j < openReplies.length; j++) openReplies[j].classList.remove('open');
-        } else if (previousBan) {
+        } else if (previousBan && !banLiftPendingAck) {
+            // Only restore comments (and reply toggles) after the user has acknowledged the lift
             loadCommentsOrDefer(section, false);
         }
     }
@@ -404,6 +409,9 @@ define([], function () {
                         banAppealStatus = null;
                     } else if (msg.banAppealDenied) {
                         banAppealStatus = { appealStatus: 'denied', adminResponse: msg.denialReason || null };
+                        // banInfo itself didn't change (ban still active), so handleBanChange will no-op — force the UI update directly
+                        updateFormVisibility(section);
+                        return;
                     }
                     handleBanChange(section, prev);
                 }
@@ -739,46 +747,52 @@ define([], function () {
             // Ban was lifted by appeal — require acknowledgment before enabling form
             nameWarning.style.display = 'none';
             serverBanWarning.style.display = 'none';
+            banWarning.classList.add('ec-ban-warning-lifted');
             banWarning.innerHTML =
                 '<div style="display:flex;flex-direction:column;gap:0.4rem;width:100%">' +
                 '<strong>\u2705 Your ban has been lifted.</strong>' +
                 '<span>Please respect the community guidelines going forward.</span>' +
-                (banLiftPendingAck.reversalMessage ? '<em style="opacity:0.8">' + esc(banLiftPendingAck.reversalMessage) + '</em>' : '') +
-                '<button class="ec-ban-lift-ok" style="align-self:flex-start;margin-top:0.25rem">OK</button>' +
+                (banLiftPendingAck.reversalMessage ? '<em style="opacity:0.85">' + esc(banLiftPendingAck.reversalMessage) + '</em>' : '') +
+                '<button class="ec-ban-lift-ok" style="align-self:flex-start;margin-top:0.25rem">I Understand</button>' +
                 '</div>';
             banWarning.style.display = 'flex';
             formToggle.style.display = 'none';
         } else if (banInfo) {
             nameWarning.style.display = 'none';
             serverBanWarning.style.display = 'none';
+            banWarning.classList.remove('ec-ban-warning-lifted');
             if (banInfo.banType === 'permanent') {
                 // Build ban message text
                 var banMsgText = banInfo.isAdmin
                     ? WARNING_SVG + ' You have been permanently banned by a comments admin. Reason: ' + esc(banInfo.reason)
                     : WARNING_SVG + ' Your account has been permanently banned from posting comments due to repeated violations.';
-                // Append appeal state UI
-                var appealUi = '';
+                // Inline appeal state badge/button
+                var appealBadge = '';
+                var appealForm = '';
                 if (banAppealStatus && banAppealStatus.appealStatus === 'pending') {
-                    appealUi = '<span class="ec-appeal-pending" title="Your appeal is under review by a moderator.">\u23f3 Appeal submitted</span>';
+                    appealBadge = '<span class="ec-appeal-pending" style="flex-shrink:0" title="Your appeal is under review by a moderator.">\u23f3 Appeal submitted</span>';
                 } else if (banAppealStatus && banAppealStatus.appealStatus === 'denied') {
                     var denialText = banAppealStatus.adminResponse
                         ? 'Appeal denied: ' + esc(banAppealStatus.adminResponse)
                         : 'Appeal denied.';
-                    appealUi = '<span style="font-size:0.82em;color:rgba(231,76,60,0.75);font-style:italic">' + denialText + '</span>';
+                    appealBadge = '<span class="ec-ban-appeal-denied-badge">' + denialText + '</span>';
                 } else {
-                    appealUi =
-                        '<button class="ec-ban-appeal-btn" title="Disagree with this decision? Submit an appeal for moderator review.">\u2197 Appeal</button>' +
+                    appealBadge = '<button class="ec-ban-appeal-btn" style="flex-shrink:0" title="Disagree with this decision? Submit an appeal for moderator review.">\u2197 Appeal</button>';
+                    appealForm =
                         '<div class="ec-ban-appeal-form" id="ec-ban-af" style="display:none">' +
                         '<textarea class="ec-ban-appeal-textarea" placeholder="Describe why you believe this ban should be lifted\u2026" maxlength="1000"></textarea>' +
                         '<div class="ec-appeal-form-actions">' +
-                        '<button class="ec-ban-appeal-submit">Submit Appeal</button>' +
-                        '<button class="ec-ban-appeal-cancel">Cancel</button>' +
+                        '<button class="ec-appeal-submit">Submit Appeal</button>' +
+                        '<button class="ec-appeal-cancel">Cancel</button>' +
                         '</div></div>';
                 }
                 banWarning.innerHTML =
-                    '<div style="display:flex;flex-direction:column;gap:0.4rem;width:100%">' +
-                    '<div>' + banMsgText + '</div>' +
-                    '<div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap">' + appealUi + '</div>' +
+                    '<div style="display:flex;flex-direction:column;gap:0.25rem;width:100%">' +
+                    '<div style="display:flex;align-items:center;gap:0.5rem">' +
+                    '<span style="flex:1;line-height:1.4">' + banMsgText + '</span>' +
+                    appealBadge +
+                    '</div>' +
+                    appealForm +
                     '</div>';
             } else if (banInfo.isAdmin) {
                 var expiry = new Date(banInfo.expiresAt);
@@ -805,8 +819,17 @@ define([], function () {
         var liftOkBtn = banWarning.querySelector('.ec-ban-lift-ok');
         if (liftOkBtn) {
             liftOkBtn.addEventListener('click', function () {
-                banLiftPendingAck = null;
-                updateFormVisibility(section);
+                liftOkBtn.disabled = true;
+                cfFetch(apiEndpoint + '/ban-lift-ack', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ UserUuid: userUuid })
+                }).finally(function () {
+                    banLiftPendingAck = null;
+                    banWarning.classList.remove('ec-ban-warning-lifted');
+                    updateFormVisibility(section);
+                    loadCommentsOrDefer(section, false);
+                });
             });
         }
         var banAppealBtn = banWarning.querySelector('.ec-ban-appeal-btn');
@@ -816,14 +839,14 @@ define([], function () {
                 if (form) form.style.display = form.style.display === 'none' ? 'block' : 'none';
             });
         }
-        var banAppealCancelBtn = banWarning.querySelector('.ec-ban-appeal-cancel');
+        var banAppealCancelBtn = banWarning.querySelector('#ec-ban-af .ec-appeal-cancel');
         if (banAppealCancelBtn) {
             banAppealCancelBtn.addEventListener('click', function () {
                 var form = banWarning.querySelector('#ec-ban-af');
                 if (form) form.style.display = 'none';
             });
         }
-        var banAppealSubmitBtn = banWarning.querySelector('.ec-ban-appeal-submit');
+        var banAppealSubmitBtn = banWarning.querySelector('#ec-ban-af .ec-appeal-submit');
         if (banAppealSubmitBtn) {
             banAppealSubmitBtn.addEventListener('click', function () {
                 var form = banWarning.querySelector('#ec-ban-af');
@@ -939,10 +962,12 @@ define([], function () {
             '.ec-appeal-btn:hover { border-color:rgba(155,89,182,0.9); color:rgba(155,89,182,1); }' +
             '.ec-ban-appeal-btn { background:none; border:1px solid rgba(155,89,182,0.5); border-radius:4px; color:rgba(155,89,182,0.85); cursor:pointer; font-size:0.78rem; padding:0.2rem 0.6rem; white-space:nowrap; line-height:1; box-sizing:border-box; }' +
             '.ec-ban-appeal-btn:hover { border-color:rgba(155,89,182,0.9); color:rgba(155,89,182,1); }' +
-            '.ec-ban-appeal-form { margin-top:0.5rem; box-sizing:border-box; }' +
+            '.ec-ban-appeal-denied-badge { font-size:0.78rem; color:rgba(231,76,60,0.75); font-style:italic; flex-shrink:0; }' +
+            '.ec-ban-appeal-form { margin-top:0.35rem; padding:0.5rem; background:rgba(0,0,0,0.2); border:1px solid rgba(155,89,182,0.25); border-radius:6px; box-sizing:border-box; }' +
             '.ec-ban-appeal-textarea { width:100%; max-width:100%; background:rgba(0,0,0,0.3); border:1px solid rgba(155,89,182,0.4); border-radius:4px; color:inherit; font-size:0.82rem; padding:0.3rem 0.4rem; resize:none; height:56px; font-family:inherit; box-sizing:border-box; }' +
-            '.ec-ban-lift-ok { background:rgba(46,213,115,0.15); border:1px solid rgba(46,213,115,0.4); border-radius:4px; color:rgba(46,213,115,0.9); cursor:pointer; font-size:0.82rem; padding:0.25rem 0.9rem; }' +
-            '.ec-ban-lift-ok:hover { background:rgba(46,213,115,0.25); }' +
+            '.ec-ban-warning-lifted { background:rgba(52,152,219,0.1) !important; border-color:rgba(52,152,219,0.3) !important; color:rgba(52,152,219,0.95) !important; }' +
+            '.ec-ban-lift-ok { background:rgba(52,152,219,0.15); border:1px solid rgba(52,152,219,0.4); border-radius:4px; color:rgba(52,152,219,0.9); cursor:pointer; font-size:0.82rem; padding:0.25rem 0.9rem; }' +
+            '.ec-ban-lift-ok:hover { background:rgba(52,152,219,0.25); }' +
             '.ec-dismiss-denial { background:none; border:1px solid rgba(231,76,60,0.4); border-radius:4px; color:rgba(231,76,60,0.7); cursor:pointer; font-size:0.72rem; padding:0.15rem 0.4rem; white-space:nowrap; flex-shrink:0; line-height:1; box-sizing:border-box; }' +
             '.ec-dismiss-denial:hover { border-color:rgba(231,76,60,0.7); color:rgba(231,76,60,1); }' +
             '.ec-appeal-pending { font-size:0.72rem; color:rgba(155,89,182,0.8); white-space:nowrap; flex-shrink:0; }' +
@@ -2262,7 +2287,7 @@ define([], function () {
             '<div class="ec-c-foot">' +
             '<button class="ec-c-act ec-like-btn' + (reaction === 'like' ? ' ec-liked' : '') + '" data-id="' + c.CommentId + '">' + (reaction === 'like' ? '\u2665' : '\u2661') + ' ' + (c.LikeCount || 0) + '</button>' +
             '<button class="ec-c-act ec-dislike-btn' + (reaction === 'dislike' ? ' ec-disliked' : '') + '" data-id="' + c.CommentId + '">' + THUMB_DOWN_SVG + ' ' + (c.DislikeCount || 0) + '</button>' +
-            (!isReply && userModerationStatus !== 'denied' && !banInfo && !serverBanInfo ? '<button class="ec-c-act ec-reply-toggle" data-id="' + c.CommentId + '">\u21a9 Reply</button>' : '') +
+            (!isReply && userModerationStatus !== 'denied' && !banInfo && !banLiftPendingAck && !serverBanInfo ? '<button class="ec-c-act ec-reply-toggle" data-id="' + c.CommentId + '">\u21a9 Reply</button>' : '') +
             (!isOwn ? '<button class="ec-report-btn' + (reportedSet[c.CommentId] ? ' ec-reported' : '') + '" data-id="' + c.CommentId + '" title="Report comment">' + FLAG_SVG + (reportedSet[c.CommentId] ? ' Reported' : '') + '</button>' : '') +
             deleteHtml +
             '</div></div>';

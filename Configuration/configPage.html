@@ -39,6 +39,8 @@
                     <span>Save All</span>
                 </button>
 
+                <div class="ecServerBanBanner" style="display:none; margin-top: 1.5em; border-radius: 6px; padding: 1em 1.25em;"></div>
+
                 <div class="ecActivityFeedSection" style="margin-top: 2em; display: none;">
                     <h3 style="margin-bottom: 0.5em;">Moderation Activity</h3>
                     <p style="font-size: 0.85em; color: var(--theme-text-color-secondary, #aaa); margin-bottom: 1em;">
@@ -48,7 +50,7 @@
                         <p style="color: var(--theme-text-color-secondary, #aaa); padding: 1em; margin: 0;">Loading activity...</p>
                     </div>
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 0.5em;">
-                        <button is="emby-button" class="emby-button btnLoadMoreActivity" style="font-size:0.85em; display:none;">
+                        <button is="emby-button" class="emby-button btnLoadMoreActivity" style="font-size:0.85em; display:none; color:var(--theme-text-color,#e0e0e0); background:rgba(255,255,255,0.07); border:1px solid rgba(255,255,255,0.15); border-radius:4px; padding:0.35em 1em;">
                             Load more
                         </button>
                         <span class="ecActivityFeedUpdated" style="font-size: 0.75em; color: var(--theme-text-color-secondary, #aaa);"></span>
