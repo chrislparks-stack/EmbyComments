@@ -40,6 +40,8 @@ define([], function () {
     var banSocketRetries = 0;
     var initRetries = 0;
     var MAX_INIT_RETRIES = 10;
+    var tokenExpiresAt = null;
+    var tokenRefreshTimer = null;
 
     var THUMB_DOWN_SVG = '<svg viewBox="0 0 24 24" width="12" height="12" style="vertical-align:-1px;"><path fill="currentColor" d="M19 15h4V3h-4m-4 0H6.2c-.7 0-1.3.4-1.6 1l-2.5 5.9c-.1.2-.1.4-.1.6V12c0 1.1.9 2 2 2h6.3l-1 4.6c-.1.5.1 1 .4 1.4l.5.5 6.7-6.7c.3-.3.5-.7.5-1.1V5c0-1.1-.9-2-2-2z"/></svg>';
     var EYE_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" style="vertical-align:-2px;"><path fill="currentColor" d="M12 4.5C7 4.5 2.7 7.6 1 12c1.7 4.4 6 7.5 11 7.5s9.3-3.1 11-7.5c-1.7-4.4-6-7.5-11-7.5zm0 12.5c-2.8 0-5-2.2-5-5s2.2-5 5-5 5 2.2 5 5-2.2 5-5 5zm0-8c-1.7 0-3 1.3-3 3s1.3 3 3 3 3-1.3 3-3-1.3-3-3-3z"/></svg>';
@@ -120,9 +122,11 @@ define([], function () {
                 }
                 userUuid = data.UserUuid;
                 sessionToken = data.token;
+                tokenExpiresAt = data.expiresAt || null;
                 userAvatarBlob = data.AvatarBlob || null;
                 initRetries = 0;
                 initResolve();
+                scheduleTokenRefresh();
             }).catch(function () { setTimeout(init, 3000); });
         }).catch(function (err) {
             var status = err && (err.status || err.statusCode);
@@ -145,6 +149,20 @@ define([], function () {
         }).catch(function () { /* keep existing value */ });
     }
 
+    function scheduleTokenRefresh() {
+        if (tokenRefreshTimer) clearTimeout(tokenRefreshTimer);
+        if (!tokenExpiresAt) return;
+        var msUntilExpiry = new Date(tokenExpiresAt).getTime() - Date.now();
+        var msUntilRefresh = Math.max(msUntilExpiry - 5 * 60 * 1000, 60 * 1000);
+        tokenRefreshTimer = setTimeout(function () {
+            refreshToken().then(function () {
+                scheduleTokenRefresh();
+            }).catch(function () {
+                tokenRefreshTimer = setTimeout(scheduleTokenRefresh, 5 * 60 * 1000);
+            });
+        }, msUntilRefresh);
+    }
+
     function refreshToken() {
         var userId = ApiClient.getCurrentUserId();
         var userKey = serverGuid + ':' + userId;
@@ -158,6 +176,7 @@ define([], function () {
             if (data.token) sessionToken = data.token;
             if (data.UserUuid) userUuid = data.UserUuid;
             if (data.AvatarBlob) userAvatarBlob = data.AvatarBlob;
+            if (data.expiresAt) { tokenExpiresAt = data.expiresAt; scheduleTokenRefresh(); }
         });
     }
 
