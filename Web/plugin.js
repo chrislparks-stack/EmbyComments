@@ -29,17 +29,21 @@ define([], function () {
     var LANG_ENGLISH_MAP = { 'Español': 'Spanish', 'Français': 'French', 'Deutsch': 'German', 'Português': 'Portuguese', 'Italiano': 'Italian', 'Nederlands': 'Dutch', 'Русский': 'Russian', '日本語': 'Japanese', '한국어': 'Korean', '中文': 'Chinese', 'العربية': 'Arabic', 'हिन्दी': 'Hindi', 'Türkçe': 'Turkish', 'Polski': 'Polish', 'Svenska': 'Swedish' };
     var sessionToken = null;
     var initResolve = null;
-    var initReady = new Promise(function (resolve) { initResolve = resolve; });
+    var initReject = null;
+    var initReady = new Promise(function (resolve, reject) { initResolve = resolve; initReject = reject; });
     var serverLocalOnly = false;
     var banInfo = null;
     var serverBanInfo = null;
     var banAppealStatus = null;    // null | { appealStatus: 'pending'|'denied', adminResponse: string|null }
     var banLiftPendingAck = null;  // null | { reversalMessage: string|null } — set when ban lifted by appeal, cleared after user clicks OK
+    var needsGuidelinesAcceptance = false;
+    var guidelinesPostBan = false;
+    var serviceError = false;
     var pendingRefresh = null;
     var banSocket = null;
     var banSocketRetries = 0;
     var initRetries = 0;
-    var MAX_INIT_RETRIES = 10;
+    var MAX_INIT_RETRIES = 5;
     var tokenExpiresAt = null;
     var tokenRefreshTimer = null;
 
@@ -74,7 +78,14 @@ define([], function () {
     }
 
     function init() {
-        if (initRetries >= MAX_INIT_RETRIES) return;
+        if (initRetries >= MAX_INIT_RETRIES) {
+            if (initReject) {
+                var err = new Error('init permanently failed');
+                err.isServiceError = true;
+                initReject(err);
+            }
+            return;
+        }
         if (!ApiClient.getCurrentUserId()) {
             setTimeout(init, 1000);
             return;
@@ -113,10 +124,16 @@ define([], function () {
             }).then(function (data) {
                 if (data.error) {
                     if (data.needsAdmin) {
-                        // Not provisioned yet, retry slowly
+                        // Plugin not yet provisioned — retry slowly waiting for an admin to log in
                         setTimeout(init, 5000);
-                    } else if (data.provisionFailed) {
-                        // Provisioning failed, stop retrying
+                    } else {
+                        // Emby responded but the worker failed (CF down, rate-limited, etc.)
+                        // No point retrying — reject immediately so the service error shows now
+                        if (initReject) {
+                            var e = new Error('worker error');
+                            e.isServiceError = true;
+                            initReject(e);
+                        }
                     }
                     return;
                 }
@@ -184,12 +201,37 @@ define([], function () {
         options = options || {};
         options.headers = options.headers || {};
         options.headers['X-EC-Token'] = sessionToken;
-        return fetch(url, options).then(function (r) {
+        function doFetch() {
+            return fetch(url, options).catch(function () {
+                var err = new Error('network error');
+                err.isServiceError = true;
+                throw err;
+            });
+        }
+        return doFetch().then(function (r) {
             if (r.status === 401) {
                 return refreshToken().then(function () {
                     options.headers['X-EC-Token'] = sessionToken;
-                    return fetch(url, options);
+                    return doFetch();
                 });
+            }
+            if (r.status === 503) {
+                return r.json().catch(function () { return {}; }).then(function (data) {
+                    if (data.emergency) {
+                        var err = new Error('emergency');
+                        err.isEmergency = true;
+                        err.emergencyMessage = data.message || null;
+                        throw err;
+                    }
+                    var err = new Error('service unavailable');
+                    err.isServiceError = true;
+                    throw err;
+                });
+            }
+            if (r.status === 429) {
+                var err = new Error('rate limited');
+                err.isServiceError = true;
+                throw err;
             }
             return r;
         });
@@ -245,6 +287,9 @@ define([], function () {
         serverBanInfo = null;
         banAppealStatus = null;
         banLiftPendingAck = null;
+        needsGuidelinesAcceptance = false;
+        guidelinesPostBan = false;
+        serviceError = false;
         stopBanListener();
         stopModerationListener();
         stopFeedListener();
@@ -331,6 +376,12 @@ define([], function () {
                 startBanListener(section);
                 startModerationListener(section);
                 startFeedListener(section);
+            }).catch(function (err) {
+                if (err && err.isEmergency) {
+                    showServiceError(section, err.emergencyMessage);
+                } else if (err && err.isServiceError) {
+                    showServiceError(section, null);
+                }
             });
         }).catch(function () {
             section.remove();
@@ -357,8 +408,13 @@ define([], function () {
                 banAppealStatus = data.banAppeal || null;
                 banLiftPendingAck = data.banLiftAckPending || null;
                 serverBanInfo = data.serverBan || null;
+                needsGuidelinesAcceptance = data.needsGuidelinesAcceptance || false;
+                guidelinesPostBan = data.guidelinesPostBan || false;
             })
-            .catch(function () { reactionsMap = {}; hiddenSet = {}; reportedSet = {}; userModerationStatus = 'approved'; censorExplicit = false; banInfo = null; banAppealStatus = null; banLiftPendingAck = null; serverBanInfo = null; });
+            .catch(function (err) {
+                if (err && (err.isEmergency || err.isServiceError)) throw err;
+                reactionsMap = {}; hiddenSet = {}; reportedSet = {}; userModerationStatus = 'approved'; censorExplicit = false; banInfo = null; banAppealStatus = null; banLiftPendingAck = null; serverBanInfo = null; needsGuidelinesAcceptance = false; guidelinesPostBan = false;
+            });
     }
 
     function fetchMyPending() {
@@ -367,6 +423,41 @@ define([], function () {
             .then(function (r) { return r.json(); })
             .then(function (data) { pendingComments = data || []; })
             .catch(function () { pendingComments = []; });
+    }
+
+    function showServiceError(section, message) {
+        serviceError = true;
+        stopModerationListener();
+        stopFeedListener();
+        var errorEl = section.querySelector('#ec-service-error');
+        var contentEl = section.querySelector('#ec-content');
+        if (errorEl) {
+            if (message) {
+                var msgEl = errorEl.querySelector('#ec-se-msg');
+                if (msgEl) msgEl.textContent = message;
+            }
+            errorEl.style.display = 'flex';
+        }
+        if (contentEl) contentEl.style.display = 'none';
+    }
+
+    function clearServiceError(section) {
+        serviceError = false;
+        var errorEl = section.querySelector('#ec-service-error');
+        var contentEl = section.querySelector('#ec-content');
+        if (errorEl) errorEl.style.display = 'none';
+        if (contentEl) contentEl.style.display = '';
+        fetchMyState().then(function () {
+            updateFormVisibility(section);
+            loadCommentsOrDefer(section, false);
+            startBanListener(section);
+            startModerationListener(section);
+            startFeedListener(section);
+        }).catch(function (err) {
+            if (err && (err.isEmergency || err.isServiceError)) {
+                showServiceError(section, err.emergencyMessage || null);
+            }
+        });
     }
 
     function handleBanChange(section, previousBan) {
@@ -399,6 +490,7 @@ define([], function () {
     }
 
     function startBanListener(section) {
+        if (banSocket && banSocket.readyState === WebSocket.OPEN) return;
         stopBanListener();
         if (!apiEndpoint || !userUuid || !sessionToken) return;
 
@@ -407,14 +499,32 @@ define([], function () {
             + '&token=' + encodeURIComponent(sessionToken);
 
         banSocket = new WebSocket(wsUrl);
-        banSocket.onopen = function () { banSocketRetries = 0; };
+        banSocket.onopen = function () {
+            banSocketRetries = 0;
+            if (serviceError) {
+                clearServiceError(section);
+            }
+        };
 
         banSocket.onmessage = function (event) {
             try {
                 var msg = JSON.parse(event.data);
+                if (Object.prototype.hasOwnProperty.call(msg, 'emergency')) {
+                    if (msg.emergency) {
+                        showServiceError(section, msg.message || null);
+                    } else {
+                        clearServiceError(section);
+                    }
+                    return;
+                }
                 if (Object.prototype.hasOwnProperty.call(msg, 'serverBan')) {
                     var prevServerBan = serverBanInfo;
                     serverBanInfo = msg.serverBan || null;
+                    // Server unban: guidelines must be re-accepted
+                    if (msg.needsGuidelinesAcceptance) {
+                        needsGuidelinesAcceptance = true;
+                        guidelinesPostBan = true;
+                    }
                     var serverBanChanged = (!!prevServerBan) !== (!!serverBanInfo);
                     if (serverBanChanged) {
                         updateFormVisibility(section);
@@ -423,6 +533,14 @@ define([], function () {
                 } else {
                     var prev = banInfo;
                     banInfo = msg.ban || null;
+                    if (msg.needsGuidelinesAcceptance !== undefined) {
+                        needsGuidelinesAcceptance = !!msg.needsGuidelinesAcceptance;
+                    }
+                    if (msg.guidelinesPostBan !== undefined) {
+                        guidelinesPostBan = !!msg.guidelinesPostBan;
+                    } else if (!banInfo && prev && needsGuidelinesAcceptance) {
+                        guidelinesPostBan = true; // fallback inference for older worker versions
+                    }
                     if (msg.liftedByAppeal) {
                         banLiftPendingAck = { reversalMessage: msg.reversalMessage || null };
                         banAppealStatus = null;
@@ -440,9 +558,18 @@ define([], function () {
         banSocket.onclose = function () {
             banSocket = null;
             if (!document.getElementById('communitycomments-section')) return;
-            if (banSocketRetries < 3) {
+            if (!serviceError && banSocketRetries < 3) {
                 banSocketRetries++;
                 setTimeout(function () { startBanListener(section); }, 2000 * banSocketRetries);
+            } else if (!serviceError) {
+                showServiceError(section, null);
+            } else {
+                // Ban WS closed while in service error — retry slowly to detect recovery
+                setTimeout(function () {
+                    if (serviceError && document.getElementById('communitycomments-section')) {
+                        startBanListener(section);
+                    }
+                }, 30000);
             }
         };
     }
@@ -745,14 +872,119 @@ define([], function () {
         pendingComments.splice(pendingIdx, 1);
     }
 
+    function showGuidelinesModal(section) {
+        var ACCEPT_LABEL = 'I Acknowledge and Accept the Community Comments Guidelines';
+        var isPostBan = guidelinesPostBan; // capture at open time
+        var overlay = document.createElement('div');
+        overlay.className = 'ec-gl-overlay';
+        overlay.innerHTML =
+            '<div class="ec-gl-modal">' +
+            '<div class="ec-gl-header"><h2>\uD83D\uDCCB Community Comments Guidelines</h2><button class="ec-gl-close" title="Close">\u2715</button></div>' +
+            '<div class="ec-gl-body">' +
+
+            (isPostBan
+                ? '<div class="ec-gl-intro" style="background:rgba(231,76,60,0.12);border-color:rgba(231,76,60,0.35);color:#e74c3c">\u26A0\uFE0F Your posting access was suspended. Re-read these guidelines before you can post again, then accept them at the bottom.</div>'
+                : '<div class="ec-gl-intro">\uD83D\uDC47 Scroll through all guidelines to enable the accept button</div>') +
+
+            '<h3>\uD83E\uDD1D Community Standards</h3>' +
+            '<p>Community Comments is a space for discussing movies and TV shows. All posts are reviewed by AI before appearing publicly. By posting you agree to keep conversations respectful and on-topic.</p>' +
+
+            '<h3>\uD83D\uDEAB Prohibited Content</h3>' +
+            '<div class="ec-gl-rules-grid">' +
+            '<span class="ec-gl-rule">\u274C Hate speech &amp; slurs</span>' +
+            '<span class="ec-gl-rule">\u274C Harassment &amp; threats</span>' +
+            '<span class="ec-gl-rule">\u274C Explicit or graphic content</span>' +
+            '<span class="ec-gl-rule">\u274C Spam &amp; unsolicited advertising</span>' +
+            '<span class="ec-gl-rule">\u274C AI manipulation (prompt injection)</span>' +
+            '<span class="ec-gl-rule">\u274C Sharing others\u2019 personal information</span>' +
+            '</div>' +
+            '<p>Denied comments are visible only to you. Repeated violations escalate to a ban.</p>' +
+
+            '<h3>\u26A1 User Bans</h3>' +
+            '<div class="ec-gl-ban-cards">' +
+            '<div class="ec-gl-ban-card hourly"><strong>\u23F1 Hourly Ban \u2014 Temporary</strong>Multiple denied comments within one hour triggers a temporary ban. You cannot post, reply, or interact until it expires automatically.</div>' +
+            '<div class="ec-gl-ban-card permanent"><strong>\uD83D\uDD34 Permanent Ban \u2014 Requires Appeal</strong>Accumulating too many total denied comments results in a permanent ban. It does not expire on its own and requires an approved appeal to be removed.</div>' +
+            '</div>' +
+
+            '<h3>\uD83C\uDF10 Server Bans</h3>' +
+            '<div class="ec-gl-ban-cards">' +
+            '<div class="ec-gl-ban-card server"><strong>\uD83D\uDED1 Server-Level Suspension</strong>If your Emby server is suspended from Community Comments \u2014 due to policy violations or abuse originating from the server \u2014 <em>all users on that server</em> lose the ability to post, reply, or interact. Comments from suspended servers are hidden network-wide. Contact your server administrator if this affects you.</div>' +
+            '</div>' +
+
+            '<h3>\u2696\uFE0F Appeals</h3>' +
+            '<p>If you believe a user ban was applied in error, tap the <strong>Appeal</strong> button in the ban notice. Appeals are reviewed by the Community Comments administration. The moderator\u2019s decision is final unless reversed by the admin.</p>' +
+            '<p>After any ban is lifted \u2014 whether expired automatically or approved via appeal \u2014 you must re-read and re-accept these guidelines before posting again.</p>' +
+
+            '<h3>\uD83D\uDEE0 Tools</h3>' +
+            '<p><strong>Explicit Filter:</strong> Toggle <em>Censor explicit</em> in the toolbar to hide explicit language in comments.</p>' +
+            '<p><strong>Reporting:</strong> Use the \uD83D\uDEA9 flag button on any comment to report it. Comments with enough reports are automatically escalated for moderator review.</p>' +
+
+            '<h3>\u26A0\uFE0F Moderator Rights</h3>' +
+            '<div class="ec-gl-callout">The Community Comments administration reserves the right to remove any comment, revoke commenting privileges, and ban any user or server at any time and for any reason \u2014 with or without prior notice and without obligation to provide an explanation. <strong>Participation in Community Comments is a privilege, not a right.</strong></div>' +
+
+            '</div>' +
+            '<div class="ec-gl-footer">' +
+            '<div class="ec-gl-scroll-hint" id="ec-gl-hint">\u2193 Scroll to read all guidelines</div>' +
+            '<button class="ec-gl-accept-btn" disabled>' + ACCEPT_LABEL + '</button>' +
+            '</div>' +
+            '</div>';
+
+        document.body.appendChild(overlay);
+
+        var glBody = overlay.querySelector('.ec-gl-body');
+        var acceptBtn = overlay.querySelector('.ec-gl-accept-btn');
+        var scrollHint = overlay.querySelector('#ec-gl-hint');
+
+        function checkBottom() {
+            if (glBody.scrollTop + glBody.clientHeight >= glBody.scrollHeight - 28) {
+                acceptBtn.disabled = false;
+                scrollHint.style.opacity = '0';
+            }
+        }
+        glBody.addEventListener('scroll', checkBottom);
+        setTimeout(checkBottom, 80); // unlock immediately if content fits
+
+        overlay.querySelector('.ec-gl-close').addEventListener('click', function () {
+            document.body.removeChild(overlay);
+        });
+        overlay.addEventListener('click', function (e) {
+            if (e.target === overlay) document.body.removeChild(overlay);
+        });
+
+        acceptBtn.addEventListener('click', function () {
+            acceptBtn.disabled = true;
+            acceptBtn.textContent = 'Saving\u2026';
+            cfFetch(apiEndpoint + '/accept-guidelines', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            }).then(function (r) { return r.json(); }).then(function (data) {
+                if (data.ok) {
+                    needsGuidelinesAcceptance = false;
+                    guidelinesPostBan = false;
+                    document.body.removeChild(overlay);
+                    updateFormVisibility(section);
+                    loadCommentsOrDefer(section, false);
+                } else {
+                    acceptBtn.disabled = false;
+                    acceptBtn.textContent = ACCEPT_LABEL;
+                }
+            }).catch(function () {
+                acceptBtn.disabled = false;
+                acceptBtn.textContent = ACCEPT_LABEL;
+            });
+        });
+    }
+
     function updateFormVisibility(section) {
         var nameWarning = section.querySelector('#ec-name-warning');
         var banWarning = section.querySelector('#ec-ban-warning');
         var serverBanWarning = section.querySelector('#ec-server-ban-warning');
+        var guidelinesGate = section.querySelector('#ec-guidelines-gate');
         var formToggle = section.querySelector('#ec-form-toggle');
         if (serverBanInfo) {
             nameWarning.style.display = 'none';
             banWarning.style.display = 'none';
+            guidelinesGate.style.display = 'none';
             serverBanWarning.innerHTML =
                 '<div style="display:flex;align-items:center;gap:0.5em;">' +
                 '\uD83D\uDEAB <strong>YOUR SERVER IS CURRENTLY BANNED</strong>' +
@@ -766,6 +998,7 @@ define([], function () {
             // Ban was lifted by appeal — require acknowledgment before enabling form
             nameWarning.style.display = 'none';
             serverBanWarning.style.display = 'none';
+            guidelinesGate.style.display = 'none';
             banWarning.classList.add('ec-ban-warning-lifted');
             banWarning.innerHTML =
                 '<div style="display:flex;flex-direction:column;gap:0.4rem;width:100%">' +
@@ -779,6 +1012,7 @@ define([], function () {
         } else if (banInfo) {
             nameWarning.style.display = 'none';
             serverBanWarning.style.display = 'none';
+            guidelinesGate.style.display = 'none';
             banWarning.classList.remove('ec-ban-warning-lifted');
             if (banInfo.banType === 'permanent') {
                 // Build ban message text
@@ -825,12 +1059,29 @@ define([], function () {
         } else if (userModerationStatus === 'denied') {
             banWarning.style.display = 'none';
             serverBanWarning.style.display = 'none';
+            guidelinesGate.style.display = 'none';
             nameWarning.style.display = 'flex';
             formToggle.style.display = 'none';
+        } else if (needsGuidelinesAcceptance) {
+            banWarning.style.display = 'none';
+            serverBanWarning.style.display = 'none';
+            nameWarning.style.display = 'none';
+            guidelinesGate.style.display = 'flex';
+            formToggle.style.display = 'none';
+            var gateMsg = guidelinesGate.querySelector('#ec-gl-gate-msg');
+            if (gateMsg) gateMsg.innerHTML = guidelinesPostBan
+                ? '\u26A0\uFE0F Due to receiving a ban, you must re-read and re-accept the <strong>Community Comments guidelines</strong> before posting again.'
+                : '\uD83D\uDCCB Before you can post, you must read and accept the <strong>Community Comments guidelines</strong>.';
+            var openBtn = guidelinesGate.querySelector('#ec-guidelines-open');
+            if (openBtn && !openBtn.dataset.wired) {
+                openBtn.dataset.wired = '1';
+                openBtn.addEventListener('click', function () { showGuidelinesModal(section); });
+            }
         } else {
             banWarning.style.display = 'none';
             serverBanWarning.style.display = 'none';
             nameWarning.style.display = 'none';
+            guidelinesGate.style.display = 'none';
             formToggle.style.display = '';
         }
 
@@ -925,6 +1176,39 @@ define([], function () {
             '.ec-name-warning { display:none; align-items:center; gap:0.5em; padding:0.6em 1em; margin-bottom:0.6em; border-radius:8px; background:rgba(231,76,60,0.1); border:1px solid rgba(231,76,60,0.25); color:#e74c3c; font-size:0.85em; }' +
             '.ec-ban-warning { display:none; align-items:center; gap:0.5em; padding:0.6em 1em; margin-bottom:0.6em; border-radius:8px; background:rgba(231,76,60,0.1); border:1px solid rgba(231,76,60,0.25); color:#e74c3c; font-size:0.85em; }' +
             '.ec-server-ban-warning { display:none; flex-direction:column; padding:0.85em 1em; margin-bottom:0.6em; border-radius:8px; background:rgba(231,76,60,0.15); border:1px solid rgba(231,76,60,0.4); border-left:4px solid #e74c3c; color:#e74c3c; font-size:0.85em; }' +
+            '.ec-guidelines-gate { display:none; flex-direction:column; gap:0.6em; padding:0.9em 1em; margin-bottom:0.6em; border-radius:8px; background:rgba(52,152,219,0.08); border:1px solid rgba(52,152,219,0.3); border-left:4px solid #3498db; font-size:0.85em; }' +
+            '.ec-guidelines-gate p { margin:0; color:var(--theme-text-color,#e0e0e0); line-height:1.4; }' +
+            '.ec-guidelines-open-btn { align-self:flex-start; background:rgba(52,152,219,0.15); border:1px solid rgba(52,152,219,0.4); border-radius:5px; color:#3498db; cursor:pointer; font-size:0.85em; padding:0.35em 0.9em; }' +
+            '.ec-guidelines-open-btn:hover { background:rgba(52,152,219,0.25); }' +
+            '.ec-gl-overlay { position:fixed; inset:0; z-index:9999; background:rgba(0,0,0,0.8); display:flex; align-items:center; justify-content:center; padding:1rem; }' +
+            '.ec-gl-modal { background:#161625; border:1px solid rgba(255,255,255,0.1); border-radius:10px; display:flex; flex-direction:column; font-size:15px; max-height:90vh; max-width:680px; width:100%; box-shadow:0 8px 40px rgba(0,0,0,0.6); }' +
+            '.ec-gl-header { align-items:center; background:rgba(52,152,219,0.08); border-bottom:1px solid rgba(255,255,255,0.08); border-radius:10px 10px 0 0; display:flex; justify-content:space-between; padding:0.9rem 1.25rem; }' +
+            '.ec-gl-header h2 { color:#e0e0e0; font-size:1em; margin:0; }' +
+            '.ec-gl-close { background:none; border:none; color:#888; cursor:pointer; font-size:1.1em; line-height:1; padding:0; }' +
+            '.ec-gl-close:hover { color:#ccc; }' +
+            '.ec-gl-body { color:#b8b8c8; font-size:1em; line-height:1.6; overflow-y:auto; padding:1.15rem 1.25rem; }' +
+            '.ec-gl-body h3 { align-items:center; border-bottom:1px solid rgba(255,255,255,0.06); color:#ddd; display:flex; font-size:0.87em; gap:0.4em; letter-spacing:0.06em; margin:1.25em 0 0.55em; padding-bottom:0.25em; text-transform:uppercase; }' +
+            '.ec-gl-body h3:first-child { margin-top:0; }' +
+            '.ec-gl-body p { margin:0 0 0.55em; }' +
+            '.ec-gl-body strong { color:#e0e0e0; }' +
+            '.ec-gl-intro { background:rgba(52,152,219,0.07); border:1px solid rgba(52,152,219,0.2); border-radius:6px; color:#7aade0; font-size:0.93em; margin-bottom:1.1em; padding:0.55em 0.9em; text-align:center; }' +
+            '.ec-gl-rules-grid { display:flex; flex-wrap:wrap; gap:0.4em; margin:0.35em 0 0.75em; }' +
+            '.ec-gl-rule { background:rgba(231,76,60,0.07); border:1px solid rgba(231,76,60,0.18); border-radius:20px; color:#c0a0a0; display:inline-flex; font-size:0.9em; padding:0.25em 0.7em; }' +
+            '.ec-gl-ban-cards { display:flex; flex-direction:column; gap:0.45em; margin:0.35em 0 0.2em; }' +
+            '.ec-gl-ban-card { border-radius:6px; font-size:0.93em; line-height:1.5; padding:0.6em 0.85em; }' +
+            '.ec-gl-ban-card strong { display:block; margin-bottom:0.2em; }' +
+            '.ec-gl-ban-card.hourly { background:rgba(230,126,34,0.07); border:1px solid rgba(230,126,34,0.22); border-left:3px solid #e67e22; }' +
+            '.ec-gl-ban-card.hourly strong { color:#e67e22; }' +
+            '.ec-gl-ban-card.permanent { background:rgba(231,76,60,0.07); border:1px solid rgba(231,76,60,0.22); border-left:3px solid #e74c3c; }' +
+            '.ec-gl-ban-card.permanent strong { color:#e74c3c; }' +
+            '.ec-gl-ban-card.server { background:rgba(155,89,182,0.07); border:1px solid rgba(155,89,182,0.22); border-left:3px solid #9b59b6; }' +
+            '.ec-gl-ban-card.server strong { color:#b07cd4; }' +
+            '.ec-gl-callout { background:rgba(231,76,60,0.06); border:1px solid rgba(231,76,60,0.18); border-left:3px solid #e74c3c; border-radius:6px; font-size:0.93em; line-height:1.5; margin:0.35em 0 0; padding:0.65em 0.9em; }' +
+            '.ec-gl-footer { border-top:1px solid rgba(255,255,255,0.08); padding:0.85rem 1.25rem; }' +
+            '.ec-gl-scroll-hint { color:rgba(150,150,170,0.6); font-size:0.87em; margin-bottom:0.5em; text-align:center; transition:opacity 0.4s; }' +
+            '.ec-gl-accept-btn { background:rgba(46,204,113,0.07); border:1px solid rgba(46,204,113,0.2); border-radius:6px; color:#4a8a5e; cursor:not-allowed; font-size:0.93em; padding:0.55em 1.25em; transition:background 0.2s,border-color 0.2s,color 0.2s; width:100%; }' +
+            '.ec-gl-accept-btn:not(:disabled) { background:rgba(46,204,113,0.15); border-color:rgba(46,204,113,0.45); color:#2ecc71; cursor:pointer; }' +
+            '.ec-gl-accept-btn:not(:disabled):hover { background:rgba(46,204,113,0.25); }' +
             '.ec-form-toggle { background:color-mix(in srgb, currentColor 5%, transparent); border:1px solid color-mix(in srgb, currentColor 10%, transparent); border-radius:8px; color:inherit; opacity:0.5; cursor:pointer; font-size:0.85em; font-family:inherit; padding:0.6em 1em; margin-bottom:0.6em; display:block; width:100%; text-align:left; transition:all 0.2s; backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); }' +
             '.ec-form-toggle:hover { opacity:0.7; background:color-mix(in srgb, currentColor 8%, transparent); }' +
             '.ec-form { display:none; margin-bottom:0.8em; position:relative; } .ec-form.open { display:block; }' +
@@ -1088,15 +1372,28 @@ define([], function () {
             '.ec-censor-btn:hover { opacity:0.9; background:color-mix(in srgb, currentColor 8%, transparent); }' +
             '.ec-censor-btn.active { background:rgba(243,156,18,0.15); border-color:rgba(243,156,18,0.3); opacity:0.9; }' +
             '.ec-censor-btn.active:hover { background:rgba(243,156,18,0.25); }' +
+            '.ec-service-error { align-items:center; display:flex; flex-direction:column; gap:0.6em; padding:2.5em 1.5em; text-align:center; }' +
+            '.ec-se-icon { font-size:2em; opacity:0.6; }' +
+            '.ec-se-title { color:var(--theme-text-color,#e0e0e0); font-size:1em; font-weight:600; opacity:0.8; }' +
+            '.ec-se-msg { color:var(--theme-text-color,#e0e0e0); font-size:0.85em; max-width:380px; opacity:0.55; line-height:1.5; }' +
             '</style>' +
             '<h2 class="sectionTitle sectionTitle-cards padded-left padded-left-page padded-right">Community Comments</h2>' +
-            '<div class="ec-content ec-loading-state sectionTitle-cards padded-left padded-left-page padded-right">' +
+            '<div class="ec-service-error sectionTitle-cards padded-left padded-left-page padded-right" id="ec-service-error" style="display:none">' +
+            '<div class="ec-se-icon">\u26A0\uFE0F</div>' +
+            '<div class="ec-se-title" id="ec-se-title">Comments Unavailable</div>' +
+            '<div class="ec-se-msg" id="ec-se-msg">Community Comments is experiencing technical difficulties. Please try again later.</div>' +
+            '</div>' +
+            '<div id="ec-content" class="ec-content ec-loading-state sectionTitle-cards padded-left padded-left-page padded-right">' +
             '<div class="ec-summary" id="ec-summary" style="display:none;"></div>' +
             '<div class="ec-scope-row" id="ec-scope-row" style="display:none;"></div>' +
             '<div class="ec-error" id="ec-error"></div>' +
             '<div class="ec-name-warning" id="ec-name-warning">' + WARNING_SVG + ' Your display name has been flagged as inappropriate. You cannot post comments or replies until you update your name in the plugin settings.</div>' +
             '<div class="ec-server-ban-warning" id="ec-server-ban-warning"></div>' +
             '<div class="ec-ban-warning" id="ec-ban-warning"></div>' +
+            '<div class="ec-guidelines-gate" id="ec-guidelines-gate">' +
+            '<p id="ec-gl-gate-msg">\uD83D\uDCCB Before you can post, you must read and accept the <strong>Community Comments guidelines</strong>.</p>' +
+            '<button class="ec-guidelines-open-btn" id="ec-guidelines-open">View Guidelines \u2192</button>' +
+            '</div>' +
             '<button class="ec-form-toggle" id="ec-form-toggle">\u270E  Write a comment...</button>' +
             '<div class="ec-form" id="ec-form">' +
             '<div class="ec-form-head">' +
@@ -2306,7 +2603,7 @@ define([], function () {
             '<div class="ec-c-foot">' +
             '<button class="ec-c-act ec-like-btn' + (reaction === 'like' ? ' ec-liked' : '') + '" data-id="' + c.CommentId + '">' + (reaction === 'like' ? '\u2665' : '\u2661') + ' ' + (c.LikeCount || 0) + '</button>' +
             '<button class="ec-c-act ec-dislike-btn' + (reaction === 'dislike' ? ' ec-disliked' : '') + '" data-id="' + c.CommentId + '">' + THUMB_DOWN_SVG + ' ' + (c.DislikeCount || 0) + '</button>' +
-            (!isReply && userModerationStatus !== 'denied' && !banInfo && !banLiftPendingAck && !serverBanInfo ? '<button class="ec-c-act ec-reply-toggle" data-id="' + c.CommentId + '">\u21a9 Reply</button>' : '') +
+            (!isReply && userModerationStatus !== 'denied' && !banInfo && !banLiftPendingAck && !serverBanInfo && !needsGuidelinesAcceptance ? '<button class="ec-c-act ec-reply-toggle" data-id="' + c.CommentId + '">\u21a9 Reply</button>' : '') +
             (!isOwn ? '<button class="ec-report-btn' + (reportedSet[c.CommentId] ? ' ec-reported' : '') + '" data-id="' + c.CommentId + '" title="Report comment">' + FLAG_SVG + (reportedSet[c.CommentId] ? ' Reported' : '') + '</button>' : '') +
             deleteHtml +
             '</div></div>';
