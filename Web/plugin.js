@@ -27,6 +27,11 @@ define([], function () {
     var showOverallRatings = false;
     var LANGUAGES = ['English', 'Español', 'Français', 'Deutsch', 'Português', 'Italiano', 'Nederlands', 'Русский', '日本語', '한국어', '中文', 'العربية', 'हिन्दी', 'Türkçe', 'Polski', 'Svenska'];
     var LANG_ENGLISH_MAP = { 'Español': 'Spanish', 'Français': 'French', 'Deutsch': 'German', 'Português': 'Portuguese', 'Italiano': 'Italian', 'Nederlands': 'Dutch', 'Русский': 'Russian', '日本語': 'Japanese', '한국어': 'Korean', '中文': 'Chinese', 'العربية': 'Arabic', 'हिन्दी': 'Hindi', 'Türkçe': 'Turkish', 'Polski': 'Polish', 'Svenska': 'Swedish' };
+    var LANG_TO_CODE = {'English':'en','Español':'es','Français':'fr','Deutsch':'de','Português':'pt','Italiano':'it','Nederlands':'nl','Русский':'ru','日本語':'ja','한국어':'ko','中文':'zh','العربية':'ar','हिन्दी':'hi','Türkçe':'tr','Polski':'pl','Svenska':'sv','Spanish':'es','French':'fr','German':'de','Portuguese':'pt','Italian':'it','Dutch':'nl','Russian':'ru','Japanese':'ja','Korean':'ko','Chinese':'zh','Arabic':'ar','Hindi':'hi','Turkish':'tr','Polish':'pl','Swedish':'sv'};
+    var CODE_TO_LANG = {};
+    Object.keys(LANG_TO_CODE).forEach(function(k) { CODE_TO_LANG[LANG_TO_CODE[k]] = k; });
+    var userLangCode = (navigator.language || 'en').split('-')[0].toLowerCase();
+    if (!CODE_TO_LANG[userLangCode]) userLangCode = 'en';
     var sessionToken = null;
     var initResolve = null;
     var initReject = null;
@@ -54,6 +59,7 @@ define([], function () {
     var WARNING_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" style="vertical-align:-2px;"><path fill="currentColor" d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>';
     var SHIELD_SVG = '<svg viewBox="0 0 24 24" width="12" height="12" style="vertical-align:-1px;"><path fill="currentColor" d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-1 17.93C7.05 17.74 5 14.49 5 11V6.3l7-3.11 7 3.11V11c0 3.49-2.05 6.74-6 7.93V18h-1v.93zM10 14.17l-2.59-2.58L6 13l4 4 8-8-1.41-1.42L10 14.17z"/></svg>';
     var FLAG_SVG = '<svg viewBox="0 0 24 24" width="12" height="12" style="vertical-align:-1px;"><path fill="currentColor" d="M14.4 6l-.4-2H5v17h2v-7h5.6l.4 2H19V6h-4.6z"/></svg>';
+    var GLOBE_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 117.17 122.88" width="14" height="14" style="vertical-align:-2px;"><path fill="currentColor" fill-rule="evenodd" d="M23.46,98.8l24-7.22-4.24,7.8c8.69,7.36,17.64,9.33,27.58,5.08-9.36,14.77-23.85,16.47-36,10.47l-4.33,7.95-7-24.08ZM23,35.33h9.93V32.77a.33.33,0,0,1,.33-.33H37.8a.33.33,0,0,1,.33.33v2.56h10a.33.33,0,0,1,.33.33v4.75a.32.32,0,0,1-.33.32H46.27a21.5,21.5,0,0,1-.91,4,25,25,0,0,1-1.73,4A32,32,0,0,1,41.55,52c-.72,1-1.51,2-2.35,3a40.33,40.33,0,0,0,4.63,4.61l0,0a55.4,55.4,0,0,0,5.82,4.28.32.32,0,0,1,.1.45l-2.35,3.68a.35.35,0,0,1-.46.1,60.53,60.53,0,0,1-6.24-4.58,44.58,44.58,0,0,1-5-4.9c-1.29,1.23-2.65,2.43-4.07,3.58-1.61,1.29-3.29,2.54-5,3.73a.33.33,0,0,1-.46-.08l-2.47-3.59a.31.31,0,0,1,.08-.45c1.69-1.17,3.34-2.4,4.91-3.68,1.39-1.13,2.72-2.3,3.95-3.51a39.71,39.71,0,0,1-3.15-5.61,44.72,44.72,0,0,1-2.43-6.63.34.34,0,0,1,.23-.4l4.21-1.18a.32.32,0,0,1,.4.23,39.2,39.2,0,0,0,1.92,5.38,37.33,37.33,0,0,0,2.32,4.39c.55-.69,1.07-1.37,1.55-2.06s1.06-1.64,1.51-2.48a19.68,19.68,0,0,0,1.29-2.91,18.87,18.87,0,0,0,.69-2.69H23a.32.32,0,0,1-.33-.32V35.66a.33.33,0,0,1,.33-.33Zm49.5,4.26h32.38a12.38,12.38,0,0,1,12.33,12.34V78a12.38,12.38,0,0,1-12.33,12.34h-1l-.66,9.89a2.62,2.62,0,0,1-4.19,2L83.25,90.35H63.18A12.38,12.38,0,0,1,50.86,78.53H38.67L20.35,93A4.57,4.57,0,0,1,13,89l.8-10.55a14.92,14.92,0,0,1-9.38-4.35l-.28-.3A14.94,14.94,0,0,1,0,63.56V35.71a15,15,0,0,1,15-15H57.49a14.91,14.91,0,0,1,10.57,4.39l.28.29a15,15,0,0,1,4.12,10.28v3.88Zm31.69-14.72L79.31,28.23l5.41-7c-7.42-8.63-16-12-26.43-9.35C69.85-1.26,84.43-.67,95.52,7.17L101,0l3.11,24.87ZM91.58,70.09h-8l-1.48,5H74.89c2.4-6.37,5.18-14,7.59-20.4.87-2.3,1.86-6.12,5-6.12s4.36,3.5,5.27,5.92l7.71,20.71H93.1l-1.52-5.14Zm-1.21-4.9-2.79-8.78-2.8,8.78ZM15,25.32H57.49A10.43,10.43,0,0,1,67.88,35.71V63.56A10.42,10.42,0,0,1,57.49,74H37.09L17.53,89.37,18.69,74H15A10.41,10.41,0,0,1,4.58,63.56V35.71A10.42,10.42,0,0,1,15,25.32Z"/></svg>';
 
 
     var avatarColors = [
@@ -626,11 +632,15 @@ define([], function () {
         freshComments.forEach(function(c) { freshMap[c.CommentId] = c; });
 
         // 1. Remove comments no longer present
-        Object.keys(currentMap).forEach(function(id) {
-            if (!freshMap[id]) animateRemoveComment(currentMap[id]);
-        });
+        var removingIds = Object.keys(currentMap).filter(function(id) { return !freshMap[id]; });
+        removingIds.forEach(function(id) { animateRemoveComment(currentMap[id]); });
 
         // 2. Insert new top-level comments at top (before first approved comment)
+        // Remove empty-state placeholder if real comments are coming in
+        if (freshComments.length > 0) {
+            var emptyEl = list.querySelector('.ec-empty');
+            if (emptyEl) emptyEl.remove();
+        }
         var insertRef = list.querySelector('.ec-c:not(.reply):not(.ec-awaiting)');
         freshComments.forEach(function(c) {
             if (currentMap[c.CommentId]) return;
@@ -699,6 +709,29 @@ define([], function () {
         });
 
         if (freshData.total !== undefined) commentTotal = freshData.total;
+        if (freshData.summary !== undefined) {
+            renderSummary(section, freshData.summary, freshData.overallSummary, freshData.total, freshData.overallTotal);
+        }
+        // If the fresh data has no comments, show empty state once removal animations finish
+        if (freshComments.length === 0 && !list.querySelector('.ec-empty')) {
+            var hasFilters = languageFilter.length > 0 || serverLocalOnly;
+            var globalTotal = (freshData.overallTotal != null) ? freshData.overallTotal : freshData.total;
+            var emptyMsg = (hasFilters && globalTotal > 0)
+                ? 'No comments in this view. Try adjusting your filters.'
+                : 'No comments yet. Be the first!';
+            if (removingIds.length > 0) {
+                // Wait for the last fade-out animation (0.8s) before inserting the empty state
+                var lastRemoving = currentMap[removingIds[removingIds.length - 1]];
+                lastRemoving.addEventListener('animationend', function () {
+                    if (!list.querySelector('.ec-c:not(.ec-awaiting)') && !list.querySelector('.ec-empty')) {
+                        list.innerHTML = '<div class="ec-empty">' + emptyMsg + '</div>';
+                    }
+                }, { once: true });
+            } else {
+                // Nothing was being removed — already empty, just ensure the placeholder is there
+                list.innerHTML = '<div class="ec-empty">' + emptyMsg + '</div>';
+            }
+        }
     }
 
     function fetchAndDiffFeed(section) {
@@ -1325,6 +1358,12 @@ define([], function () {
             '.ec-c:hover .ec-delete-btn { opacity:0.2; } .ec-delete-btn:hover { color:#e74c3c; opacity:1; background:rgba(231,76,60,0.08); }' +
             '.ec-delete-confirm { display:none; font-size:0.72em; color:#e74c3c; margin-left:auto; align-items:center; gap:4px; } .ec-delete-confirm.ec-active { display:inline-flex; }' +
             '.ec-delete-confirm-btn { background:none; border:none; color:#e74c3c; cursor:pointer; font-family:inherit; font-size:1em; font-weight:600; padding:0; text-decoration:underline; }' +
+            '.ec-translate-btn { background:none; border:none; color:#5dade2; opacity:0.45; cursor:pointer; display:inline-flex; align-items:center; gap:3px; font-size:0.72em; font-family:inherit; padding:2px 4px; border-radius:3px; transition:all 0.15s; }' +
+            '.ec-translate-btn:hover { opacity:0.9; background:rgba(52,152,219,0.08); } .ec-translate-btn.ec-translating { opacity:0.2; pointer-events:none; }' +
+            '.ec-show-original-btn { background:none; border:none; color:#5dade2; opacity:0.45; cursor:pointer; font-size:0.72em; font-family:inherit; padding:2px 4px; border-radius:3px; transition:all 0.15s; display:none; }' +
+            '.ec-show-original-btn:hover { opacity:0.9; }' +
+            '.ec-show-original-btn svg { transform:scaleX(-1); }' +
+            '.ec-translated-note { font-size:0.8em; opacity:0.45; font-style:italic; }' +
             '.ec-show-more { background:none; border:none; color:var(--theme-accent-text-color, #00a4dc); cursor:pointer; font-size:0.75em; font-family:inherit; padding:0.4em 0.5em; opacity:0.8; transition:opacity 0.15s; width:fit-content; align-self:center; } .ec-show-more:hover { opacity:1; text-decoration:underline; }' +
             '.ec-reply-inline { display:none; padding:0.3em 0.4em 0.3em 3.6em; } .ec-reply-inline.open { display:flex; gap:0.4em; align-items:flex-start; }' +            '.ec-reply-main { display:flex; flex-direction:column; gap:0.22em; flex:1; min-width:0; }' +
             '.ec-reply-inline .ec-textarea { min-height:46px; height:46px; font-size:0.8em; line-height:1.35; padding:0.4em 0.6em; flex:none; border-radius:6px; overflow-y:hidden; resize:none; box-sizing:border-box; }' +            '.ec-reply-char-count { font-size:0.72em; opacity:0.3; text-align:right; padding-right:2px; line-height:1; }' +
@@ -2318,7 +2357,8 @@ define([], function () {
 
         var spark = buildSparkline(active.distribution || {});
 
-        el.innerHTML = '<div class="ec-avg"><span class="ec-avg-num">' + active.avg.toFixed(1) + '</span><span class="ec-avg-max">/10</span></div>' +
+        var avgDisplay = active.avg % 1 === 0 ? String(Math.round(active.avg)) : active.avg.toFixed(1);
+        el.innerHTML = '<div class="ec-avg"><span class="ec-avg-num">' + avgDisplay + '</span><span class="ec-avg-max">/10</span></div>' +
             '<div class="ec-avg-detail"><div class="ec-avg-stars">' + buildDecimalStars(active.avg, 10) + '</div>' +
             '<div class="ec-avg-meta">' + (active.ratedCount || 0) + ' ratings \u00B7 ' + ((hasLangFilter && showOverallRatings && cachedOverallTotal != null) ? cachedOverallTotal : total) + ' comments</div></div>' +
             (spark ? '<div class="ec-spark">' + spark + '</div>' : '');
@@ -2604,6 +2644,7 @@ define([], function () {
             '<button class="ec-c-act ec-like-btn' + (reaction === 'like' ? ' ec-liked' : '') + '" data-id="' + c.CommentId + '">' + (reaction === 'like' ? '\u2665' : '\u2661') + ' ' + (c.LikeCount || 0) + '</button>' +
             '<button class="ec-c-act ec-dislike-btn' + (reaction === 'dislike' ? ' ec-disliked' : '') + '" data-id="' + c.CommentId + '">' + THUMB_DOWN_SVG + ' ' + (c.DislikeCount || 0) + '</button>' +
             (!isReply && userModerationStatus !== 'denied' && !banInfo && !banLiftPendingAck && !serverBanInfo && !needsGuidelinesAcceptance ? '<button class="ec-c-act ec-reply-toggle" data-id="' + c.CommentId + '">\u21a9 Reply</button>' : '') +
+            (c.Body && c.Language && LANG_TO_CODE[c.Language] && LANG_TO_CODE[c.Language] !== userLangCode ? '<button class="ec-translate-btn" data-id="' + c.CommentId + '">' + GLOBE_SVG + '<span class="ec-translate-label"> Translate</span></button><button class="ec-show-original-btn" data-id="' + c.CommentId + '">' + GLOBE_SVG + ' Show original</button>' : '') +
             (!isOwn ? '<button class="ec-report-btn' + (reportedSet[c.CommentId] ? ' ec-reported' : '') + '" data-id="' + c.CommentId + '" title="Report comment">' + FLAG_SVG + (reportedSet[c.CommentId] ? ' Reported' : '') + '</button>' : '') +
             deleteHtml +
             '</div></div>';
@@ -2809,6 +2850,55 @@ define([], function () {
                         }
                     });
                 });
+            });
+        }
+
+        // Translate / Show original
+        var translateBtn = el.querySelector('.ec-translate-btn');
+        var showOriginalBtn = el.querySelector('.ec-show-original-btn');
+
+        if (translateBtn) {
+            translateBtn.addEventListener('click', function () {
+                var lbl = translateBtn.querySelector('.ec-translate-label');
+                translateBtn.classList.add('ec-translating');
+                if (lbl) lbl.textContent = ' Translating\u2026';
+                cfFetch(apiEndpoint + '/translate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ commentId: comment.CommentId, targetLang: userLangCode })
+                }).then(function (r) { return r.json(); }).then(function (data) {
+                    if (data.error) {
+                        translateBtn.classList.remove('ec-translating');
+                        if (lbl) lbl.textContent = ' Translate';
+                        return;
+                    }
+                    var textEl = el.querySelector('.ec-c-text');
+                    if (!textEl) return;
+                    textEl.dataset.originalBody = textEl.innerHTML;
+                    textEl.innerHTML = esc(data.translatedBody) + ' <span class="ec-translated-note">(translated)</span>';
+                    translateBtn.style.display = 'none';
+                    if (showOriginalBtn) showOriginalBtn.style.display = 'inline';
+                }).catch(function () {
+                    translateBtn.classList.remove('ec-translating');
+                    if (lbl) lbl.textContent = ' Translate';
+                });
+            });
+        }
+
+        if (showOriginalBtn) {
+            showOriginalBtn.addEventListener('click', function () {
+                var textEl = el.querySelector('.ec-c-text');
+                if (textEl && textEl.dataset.originalBody !== undefined) {
+                    textEl.innerHTML = textEl.dataset.originalBody;
+                    delete textEl.dataset.originalBody;
+                }
+                showOriginalBtn.style.display = 'none';
+                if (translateBtn) {
+                    translateBtn.classList.remove('ec-translating');
+                    var lbl = translateBtn.querySelector('.ec-translate-label');
+                    if (lbl) lbl.textContent = ' Translate';
+                    translateBtn.style.display = '';
+                }
             });
         }
     }
