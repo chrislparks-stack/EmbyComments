@@ -37,8 +37,12 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
     }
 
     function setError(view, msg) {
-        view.querySelector('.communityCommentsUserList').innerHTML =
-            '<p style="color:var(--theme-error-color,#e74c3c);">' + msg + '</p>';
+        var container = view.querySelector('.communityCommentsUserList');
+        container.innerHTML = '';
+        var p = document.createElement('p');
+        p.style.color = 'var(--theme-error-color,#e74c3c)';
+        p.textContent = msg;
+        container.appendChild(p);
     }
 
     function showStatus(view, msg, isError) {
@@ -70,15 +74,16 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
 
     function setNameStatus(warning, status, reason) {
         if (status === 'awaiting') {
-            warning.innerHTML = SHIELD_SVG + ' Waiting for moderation';
+            warning.innerHTML = SHIELD_SVG;
+            warning.appendChild(document.createTextNode(' Waiting for moderation'));
             warning.style.color = '#3498db';
             warning.style.display = 'inline';
         } else if (status === 'approved') {
-            warning.innerHTML = '\u2714 Custom name approved';
+            warning.textContent = '\u2714 Custom name approved';
             warning.style.color = '#2ecc71';
             warning.style.display = 'inline';
         } else if (status === 'denied') {
-            warning.innerHTML = '\u26A0 ' + (reason || 'This name was flagged and cannot post comments');
+            warning.textContent = '\u26A0 ' + (reason || 'This name was flagged and cannot post comments');
             warning.style.color = 'var(--theme-error-color, #e74c3c)';
             warning.style.display = 'inline';
         } else {
@@ -609,28 +614,42 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
     function startBanNotifySocket(instance, userUuid, token) {
         stopBanNotifySocket(instance);
         if (!instance.apiEndpoint) return;
-        var wsUrl = instance.apiEndpoint.replace(/^https:\/\//, 'wss://').replace(/^http:\/\//, 'ws://')
-            + '/ban-ws?userUuid=' + encodeURIComponent(userUuid)
-            + '&token=' + encodeURIComponent(token);
-        var ws = new WebSocket(wsUrl);
-        ws.onmessage = function (event) {
-            try {
-                var msg = JSON.parse(event.data);
-                if (Object.prototype.hasOwnProperty.call(msg, 'serverBan')) {
-                    loadServerBanStatus(instance);
-                    loadActivityFeed(instance, null, false);
+
+        // Exchange token for a short-lived WS ticket so the long-lived token never
+        // appears in URLs, browser history, or proxy logs.
+        fetch(instance.apiEndpoint + '/ws-ticket', {
+            method: 'POST',
+            headers: { 'X-EC-Token': token }
+        }).then(function (r) { return r.json(); }).then(function (data) {
+            if (!data || !data.ticket) throw new Error('no ticket');
+            var wsUrl = instance.apiEndpoint.replace(/^https:\/\//, 'wss://').replace(/^http:\/\//, 'ws://')
+                + '/ban-ws?userUuid=' + encodeURIComponent(userUuid)
+                + '&ticket=' + encodeURIComponent(data.ticket);
+            var ws = new WebSocket(wsUrl);
+            ws.onmessage = function (event) {
+                try {
+                    var msg = JSON.parse(event.data);
+                    if (Object.prototype.hasOwnProperty.call(msg, 'serverBan')) {
+                        loadServerBanStatus(instance);
+                        loadActivityFeed(instance, null, false);
+                    }
+                } catch (_) {}
+            };
+            ws.onclose = function () {
+                if (instance.banNotifySocket === ws) {
+                    instance.banNotifySocket = null;
+                    setTimeout(function () {
+                        if (!instance.banNotifySocket) startBanNotifySocket(instance, userUuid, token);
+                    }, 5000);
                 }
-            } catch (_) {}
-        };
-        ws.onclose = function () {
-            if (instance.banNotifySocket === ws) {
-                instance.banNotifySocket = null;
-                setTimeout(function () {
-                    if (!instance.banNotifySocket) startBanNotifySocket(instance, userUuid, token);
-                }, 5000);
-            }
-        };
-        instance.banNotifySocket = ws;
+            };
+            instance.banNotifySocket = ws;
+        }).catch(function () {
+            // Reconnect later if ticket fetch failed
+            setTimeout(function () {
+                if (!instance.banNotifySocket) startBanNotifySocket(instance, userUuid, token);
+            }, 5000);
+        });
     }
 
     function stopBanNotifySocket(instance) {

@@ -73,11 +73,23 @@ define([], function () {
         return avatarColors[Math.abs(hash) % avatarColors.length];
     }
 
+    var SAFE_DATA_URL_RE = /^data:image\/(jpeg|jpg|png|gif|webp);base64,[A-Za-z0-9+/=]+$/i;
+    var SAFE_HTTP_URL_RE = /^https?:\/\//i;
+
+    function isSafeAvatarUrl(u) {
+        if (!u || typeof u !== 'string') return false;
+        if (u.length > 200000) return false;
+        if (u.indexOf('data:') === 0) return SAFE_DATA_URL_RE.test(u);
+        if (SAFE_HTTP_URL_RE.test(u)) return true;
+        // Relative URL — will be passed through ApiClient.getUrl, treated as safe path on Emby host
+        return /^[A-Za-z0-9_\-./]+$/.test(u);
+    }
+
     function renderAvatar(name, avatarUrl, extraStyle) {
         var style = 'background:' + hashColor(name) + ';' + (extraStyle || '');
         var letter = esc(name.charAt(0));
-        if (avatarUrl) {
-            var resolvedUrl = (avatarUrl.indexOf('data:') === 0 || avatarUrl.indexOf('http') === 0) ? avatarUrl : ApiClient.getUrl(avatarUrl);
+        if (avatarUrl && isSafeAvatarUrl(avatarUrl)) {
+            var resolvedUrl = (avatarUrl.indexOf('data:') === 0 || SAFE_HTTP_URL_RE.test(avatarUrl)) ? avatarUrl : ApiClient.getUrl(avatarUrl);
             return '<div class="ec-avatar" style="' + style + '">' + letter + '<img src="' + esc(resolvedUrl) + '" onerror="this.style.display=\'none\'"></div>';
         }
         return '<div class="ec-avatar" style="' + style + '">' + letter + '</div>';
@@ -241,6 +253,19 @@ define([], function () {
             }
             return r;
         });
+    }
+
+    // Exchange the long-lived session token for a short-lived single-use WebSocket
+    // ticket. Tickets are sent in the WS URL query string; tokens are not, because
+    // WS URLs leak via Referer, browser history, and proxy logs.
+    function fetchWsTicket() {
+        if (!apiEndpoint || !sessionToken) return Promise.reject(new Error('no session'));
+        return cfFetch(apiEndpoint + '/ws-ticket', { method: 'POST' })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (!data || !data.ticket) throw new Error('no ticket');
+                return data.ticket;
+            });
     }
 
     function startObserver() {
@@ -490,9 +515,11 @@ define([], function () {
 
     function warmupListeners() {
         if (!apiEndpoint || !sessionToken) return Promise.resolve();
-        var url = apiEndpoint + '/ws-warmup?token=' + encodeURIComponent(sessionToken)
-            + (currentMediaKey ? '&mediaKey=' + encodeURIComponent(currentMediaKey) : '');
-        return cfFetch(url).catch(function () {});
+        return fetchWsTicket().then(function (ticket) {
+            var url = apiEndpoint + '/ws-warmup?ticket=' + encodeURIComponent(ticket)
+                + (currentMediaKey ? '&mediaKey=' + encodeURIComponent(currentMediaKey) : '');
+            return cfFetch(url);
+        }).catch(function () {});
     }
 
     function startBanListener(section) {
@@ -500,10 +527,16 @@ define([], function () {
         stopBanListener();
         if (!apiEndpoint || !userUuid || !sessionToken) return;
 
-        var wsUrl = apiEndpoint.replace('https://', 'wss://').replace('http://', 'ws://')
-            + '/ban-ws?userUuid=' + encodeURIComponent(userUuid)
-            + '&token=' + encodeURIComponent(sessionToken);
+        fetchWsTicket().then(function (ticket) {
+            if (banSocket && banSocket.readyState === WebSocket.OPEN) return;
+            var wsUrl = apiEndpoint.replace('https://', 'wss://').replace('http://', 'ws://')
+                + '/ban-ws?userUuid=' + encodeURIComponent(userUuid)
+                + '&ticket=' + encodeURIComponent(ticket);
+            connectBanSocket(section, wsUrl);
+        }).catch(function () { /* will retry via reconnect logic on next event */ });
+    }
 
+    function connectBanSocket(section, wsUrl) {
         banSocket = new WebSocket(wsUrl);
         banSocket.onopen = function () {
             banSocketRetries = 0;
@@ -753,25 +786,28 @@ define([], function () {
         stopFeedListener();
         if (!apiEndpoint || !currentMediaKey || !sessionToken) return;
 
-        var wsUrl = apiEndpoint.replace('https://', 'wss://').replace('http://', 'ws://')
-            + '/feed-ws?mediaKey=' + encodeURIComponent(currentMediaKey)
-            + '&token=' + encodeURIComponent(sessionToken);
+        fetchWsTicket().then(function (ticket) {
+            if (!currentMediaKey) return;
+            var wsUrl = apiEndpoint.replace('https://', 'wss://').replace('http://', 'ws://')
+                + '/feed-ws?mediaKey=' + encodeURIComponent(currentMediaKey)
+                + '&ticket=' + encodeURIComponent(ticket);
 
-        feedSocket = new WebSocket(wsUrl);
-        feedSocket.onopen = function () { feedSocketRetries = 0; };
+            feedSocket = new WebSocket(wsUrl);
+            feedSocket.onopen = function () { feedSocketRetries = 0; };
 
-        feedSocket.onmessage = function () {
-            fetchAndDiffFeed(section);
-        };
+            feedSocket.onmessage = function () {
+                fetchAndDiffFeed(section);
+            };
 
-        feedSocket.onclose = function () {
-            feedSocket = null;
-            if (!document.getElementById('communitycomments-section')) return;
-            if (feedSocketRetries < 3) {
-                feedSocketRetries++;
-                setTimeout(function () { startFeedListener(section); }, 2000 * feedSocketRetries);
-            }
-        };
+            feedSocket.onclose = function () {
+                feedSocket = null;
+                if (!document.getElementById('communitycomments-section')) return;
+                if (feedSocketRetries < 3) {
+                    feedSocketRetries++;
+                    setTimeout(function () { startFeedListener(section); }, 2000 * feedSocketRetries);
+                }
+            };
+        }).catch(function () { /* retry via reconnect logic */ });
     }
 
     function stopFeedListener() {
@@ -782,28 +818,30 @@ define([], function () {
         stopModerationListener();
         if (!apiEndpoint || !userUuid || !sessionToken) return;
 
-        var wsUrl = apiEndpoint.replace('https://', 'wss://').replace('http://', 'ws://')
-            + '/moderation-ws?userUuid=' + encodeURIComponent(userUuid)
-            + '&token=' + encodeURIComponent(sessionToken);
+        fetchWsTicket().then(function (ticket) {
+            var wsUrl = apiEndpoint.replace('https://', 'wss://').replace('http://', 'ws://')
+                + '/moderation-ws?userUuid=' + encodeURIComponent(userUuid)
+                + '&ticket=' + encodeURIComponent(ticket);
 
-        moderationSocket = new WebSocket(wsUrl);
-        moderationSocket.onopen = function () { moderationSocketRetries = 0; };
+            moderationSocket = new WebSocket(wsUrl);
+            moderationSocket.onopen = function () { moderationSocketRetries = 0; };
 
-        moderationSocket.onmessage = function (event) {
-            try {
-                var msg = JSON.parse(event.data);
-                handleModerationPush(section, msg);
-            } catch (e) {}
-        };
+            moderationSocket.onmessage = function (event) {
+                try {
+                    var msg = JSON.parse(event.data);
+                    handleModerationPush(section, msg);
+                } catch (e) {}
+            };
 
-        moderationSocket.onclose = function () {
-            moderationSocket = null;
-            if (!document.getElementById('communitycomments-section')) return;
-            if (moderationSocketRetries < 3) {
-                moderationSocketRetries++;
-                setTimeout(function () { startModerationListener(section); }, 2000 * moderationSocketRetries);
-            }
-        };
+            moderationSocket.onclose = function () {
+                moderationSocket = null;
+                if (!document.getElementById('communitycomments-section')) return;
+                if (moderationSocketRetries < 3) {
+                    moderationSocketRetries++;
+                    setTimeout(function () { startModerationListener(section); }, 2000 * moderationSocketRetries);
+                }
+            };
+        }).catch(function () { /* retry via reconnect logic */ });
     }
 
     function stopModerationListener() {
@@ -2874,7 +2912,9 @@ define([], function () {
                     }
                     var textEl = el.querySelector('.ec-c-text');
                     if (!textEl) return;
-                    textEl.dataset.originalBody = textEl.innerHTML;
+                    // Store the original body as plain text so revert can re-render via esc()
+                    // rather than blindly re-injecting prior innerHTML.
+                    textEl.dataset.originalBody = comment.Body || '';
                     textEl.innerHTML = esc(data.translatedBody) + ' <span class="ec-translated-note">(translated)</span>';
                     translateBtn.style.display = 'none';
                     if (showOriginalBtn) showOriginalBtn.style.display = 'inline';
@@ -2889,7 +2929,7 @@ define([], function () {
             showOriginalBtn.addEventListener('click', function () {
                 var textEl = el.querySelector('.ec-c-text');
                 if (textEl && textEl.dataset.originalBody !== undefined) {
-                    textEl.innerHTML = textEl.dataset.originalBody;
+                    textEl.innerHTML = esc(textEl.dataset.originalBody);
                     delete textEl.dataset.originalBody;
                 }
                 showOriginalBtn.style.display = 'none';

@@ -9,9 +9,11 @@ using MediaBrowser.Model.Services;
 namespace CommunityComments.Api
 {
     [Route("/communitycomments/config", "GET", Summary = "Get plugin configuration for any authenticated user")]
+    [Authenticated]
     public class GetConfig : IReturn<object> { }
 
     [Route("/communitycomments/init", "POST", Summary = "Register user and get session token")]
+    [Authenticated]
     public class InitUser : IReturn<object>
     {
         public string UserKey { get; set; }
@@ -19,6 +21,7 @@ namespace CommunityComments.Api
     }
 
     [Route("/communitycomments/register-name", "POST", Summary = "Sync display name to Worker")]
+    [Authenticated]
     public class RegisterName : IReturn<object>
     {
         public string UserKey { get; set; }
@@ -27,6 +30,7 @@ namespace CommunityComments.Api
     }
 
     [Route("/communitycomments/activity-feed", "GET", Summary = "Get high-priority moderation activity feed (admin only)")]
+    [Authenticated]
     public class GetActivityFeed : IReturn<object>
     {
         public string Cursor { get; set; }
@@ -34,9 +38,11 @@ namespace CommunityComments.Api
     }
 
     [Route("/communitycomments/server-ban-status", "GET", Summary = "Get server ban and appeal status (admin only)")]
+    [Authenticated]
     public class GetServerBanStatus : IReturn<object> { }
 
     [Route("/communitycomments/server-ban-appeal", "POST", Summary = "Submit an appeal for a server ban (admin only)")]
+    [Authenticated]
     public class PostServerBanAppeal : IReturn<object>
     {
         public string Reason { get; set; }
@@ -81,13 +87,16 @@ namespace CommunityComments.Api
             if (string.IsNullOrEmpty(request.UserKey) || string.IsNullOrEmpty(request.DisplayName))
                 return new { error = "UserKey and DisplayName are required" };
 
+            var authInfo = _authContext.GetAuthorizationInfo(Request);
+            if (authInfo?.User == null)
+                return new { error = "Authentication required" };
+
             var config = Plugin.Instance.Configuration;
 
             // If API key or WAN address missing, only admin can provision
             if (string.IsNullOrEmpty(config.EmbyApiKey) || string.IsNullOrEmpty(config.WanAddress))
             {
-                var authInfo = _authContext.GetAuthorizationInfo(Request);
-                if (authInfo?.User == null || !authInfo.User.Policy.IsAdministrator)
+                if (!authInfo.User.Policy.IsAdministrator)
                 {
                     return new { error = "Plugin is not yet configured. An admin must log in first to complete setup.", needsAdmin = true };
                 }
@@ -101,6 +110,12 @@ namespace CommunityComments.Api
                     return new { error = "Provisioning failed: " + ex.Message, provisionFailed = true };
                 }
             }
+
+            // Refresh the WAN address from Emby every time. Residential public IPs
+            // change without warning, and a stale WanAddress makes the worker time
+            // out trying to verify the server. /emby/System/Info reports the current
+            // value — pulling it here keeps config in sync and is cheap (localhost).
+            await RefreshWanAddressAsync(config);
 
             // ServerId can be fetched without admin via public endpoint
             if (string.IsNullOrEmpty(config.ServerId))
@@ -125,25 +140,40 @@ namespace CommunityComments.Api
             if (string.IsNullOrEmpty(config.ServerId))
                 return new { error = "Could not determine server ID. Please restart Emby and try again." };
 
-            // Fetch avatar from Emby: parse userId from UserKey (format: serverId:userId)
+            // Validate the client-supplied UserKey belongs to this server and to the authenticated caller.
+            // Format: "<serverId>:<embyUserId>". Compare userId portions case-insensitively and
+            // tolerant of "N" (no-dashes) vs "D" (dashed) GUID formats.
+            var keyParts = request.UserKey.Split(':');
+            if (keyParts.Length != 2 || string.IsNullOrEmpty(keyParts[0]) || string.IsNullOrEmpty(keyParts[1]))
+                return new { error = "Invalid UserKey format" };
+            if (!string.Equals(keyParts[0], config.ServerId, StringComparison.OrdinalIgnoreCase))
+                return new { error = "UserKey does not belong to this server" };
+
+            string Normalize(string s) => (s ?? string.Empty).Replace("-", "").ToLowerInvariant();
+            if (!string.Equals(Normalize(keyParts[1]), Normalize(authInfo.User.Id.ToString("N")), StringComparison.Ordinal))
+                return new { error = "UserKey does not match the authenticated user" };
+
+            var embyUserId = keyParts[1];
+
+            // Fetch the authenticated user's avatar from Emby. Whitelist content-type,
+            // verify magic bytes, and cap size — the blob is rendered in <img src> in
+            // every other server's UI, so SVG/HTML disguised as image/* must be rejected.
             var avatarBlob = string.Empty;
-            var parts = request.UserKey?.Split(':');
-            if (parts != null && parts.Length == 2)
+            try
             {
-                try
+                var localBaseUrl = $"http://localhost:{_appHost.HttpPort}";
+                var avatarResp = await _httpClient.GetAsync($"{localBaseUrl}/emby/Users/{embyUserId}/Images/Primary?maxheight=64&quality=80");
+                if (avatarResp.IsSuccessStatusCode)
                 {
-                    var embyUserId = parts[1];
-                    var localBaseUrl = $"http://localhost:{_appHost.HttpPort}";
-                    var avatarResp = await _httpClient.GetAsync($"{localBaseUrl}/emby/Users/{embyUserId}/Images/Primary?maxheight=64&quality=80");
-                    if (avatarResp.IsSuccessStatusCode)
+                    var bytes = await avatarResp.Content.ReadAsByteArrayAsync();
+                    var sniffed = SniffSafeImageType(bytes);
+                    if (sniffed != null && bytes.Length <= 64 * 1024)
                     {
-                        var bytes = await avatarResp.Content.ReadAsByteArrayAsync();
-                        var contentType = avatarResp.Content.Headers.ContentType?.MediaType ?? "image/jpeg";
-                        avatarBlob = $"data:{contentType};base64,{Convert.ToBase64String(bytes)}";
+                        avatarBlob = $"data:{sniffed};base64,{Convert.ToBase64String(bytes)}";
                     }
                 }
-                catch { /* no avatar, fallback to colored initial */ }
             }
+            catch { /* no avatar, fallback to colored initial */ }
 
             // Now proxy to Worker /token
             try
@@ -166,11 +196,31 @@ namespace CommunityComments.Api
             if (string.IsNullOrEmpty(request.UserKey) || string.IsNullOrEmpty(request.DisplayName))
                 return new { error = "UserKey and DisplayName are required" };
 
+            var authInfo = _authContext.GetAuthorizationInfo(Request);
+            if (authInfo?.User == null)
+                return new { error = "Authentication required" };
+
             var config = Plugin.Instance.Configuration;
             if (string.IsNullOrEmpty(config.EmbyApiKey) || string.IsNullOrEmpty(config.WanAddress))
             {
                 return new { error = "Plugin is not yet configured. An admin must log in first." };
             }
+
+            // Validate the UserKey is for THIS server, and that the caller may register it.
+            // Format: "<serverId>:<embyUserId>"
+            var keyParts = request.UserKey.Split(':');
+            if (keyParts.Length != 2 || string.IsNullOrEmpty(keyParts[0]) || string.IsNullOrEmpty(keyParts[1]))
+                return new { error = "Invalid UserKey format" };
+
+            if (!string.Equals(keyParts[0], config.ServerId, StringComparison.OrdinalIgnoreCase))
+                return new { error = "UserKey does not belong to this server" };
+
+            string Normalize(string s) => (s ?? string.Empty).Replace("-", "").ToLowerInvariant();
+            var isAdmin = authInfo.User.Policy != null && authInfo.User.Policy.IsAdministrator;
+            var isSelf = string.Equals(Normalize(keyParts[1]), Normalize(authInfo.User.Id.ToString("N")), StringComparison.Ordinal);
+
+            if (!isAdmin && !isSelf)
+                return new { error = "Only an administrator can register a name for another user" };
 
             try
             {
@@ -293,6 +343,107 @@ namespace CommunityComments.Api
         }
 
         /// <summary>
+        /// Refreshes <see cref="PluginConfiguration.WanAddress"/> from the most
+        /// authoritative source we can find. Tries Emby's reported WanAddress first;
+        /// if Emby returns an empty value (common behind NAT without UPnP, double-NAT,
+        /// or with disabled remote-access discovery), falls back to detecting the
+        /// public IP from ipify and reuses the scheme/port from the existing
+        /// WanAddress so the user's port-forward setup is preserved.
+        ///
+        /// Best-effort — every failure path is swallowed because the caller will
+        /// surface a more user-visible error if the address still ends up bad.
+        /// </summary>
+        private async Task RefreshWanAddressAsync(PluginConfiguration config)
+        {
+            try
+            {
+                // 1) Ask Emby — fastest and most accurate when it works
+                var embyReported = await TryGetEmbyWanAddressAsync(config);
+                if (!string.IsNullOrEmpty(embyReported))
+                {
+                    if (!string.Equals(config.WanAddress, embyReported, StringComparison.Ordinal))
+                    {
+                        config.WanAddress = embyReported;
+                        Plugin.Instance.SaveConfiguration();
+                    }
+                    return;
+                }
+
+                // 2) Fall back to public-IP detection
+                var publicIp = await TryGetPublicIpAsync();
+                if (string.IsNullOrEmpty(publicIp)) return;
+
+                // Preserve scheme + port from the previous WanAddress when present.
+                // The user's port-forward config is encoded there; we don't know it
+                // from anywhere else. If no prior value exists, default to
+                // http://<ip>:<emby-http-port>.
+                string newWan;
+                if (!string.IsNullOrEmpty(config.WanAddress)
+                    && Uri.TryCreate(config.WanAddress, UriKind.Absolute, out var existingUri))
+                {
+                    var portPart = existingUri.IsDefaultPort ? string.Empty : ":" + existingUri.Port;
+                    newWan = $"{existingUri.Scheme}://{publicIp}{portPart}";
+                }
+                else
+                {
+                    newWan = $"http://{publicIp}:{_appHost.HttpPort}";
+                }
+
+                if (!string.Equals(config.WanAddress, newWan, StringComparison.Ordinal))
+                {
+                    config.WanAddress = newWan;
+                    Plugin.Instance.SaveConfiguration();
+                }
+            }
+            catch { /* best effort */ }
+        }
+
+        private async Task<string> TryGetEmbyWanAddressAsync(PluginConfiguration config)
+        {
+            if (string.IsNullOrEmpty(config.EmbyApiKey)) return null;
+            try
+            {
+                var localBaseUrl = $"http://localhost:{_appHost.HttpPort}";
+                var infoRequest = new HttpRequestMessage(HttpMethod.Get, $"{localBaseUrl}/emby/System/Info");
+                infoRequest.Headers.Add("X-Emby-Token", config.EmbyApiKey);
+                var infoResponse = await _httpClient.SendAsync(infoRequest);
+                if (!infoResponse.IsSuccessStatusCode) return null;
+
+                var infoJson = await infoResponse.Content.ReadAsStringAsync();
+                using var infoDoc = JsonDocument.Parse(infoJson);
+                var wan = infoDoc.RootElement.TryGetProperty("WanAddress", out var wa) ? wa.GetString() : null;
+                return string.IsNullOrEmpty(wan) ? null : wan;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static async Task<string> TryGetPublicIpAsync()
+        {
+            // ipify is a long-running plain-text public-IP echo service. We try it
+            // first; a single fallback (icanhazip) covers the rare ipify outage.
+            string[] sources = { "https://api.ipify.org", "https://icanhazip.com" };
+            foreach (var src in sources)
+            {
+                try
+                {
+                    using var resp = await _httpClient.GetAsync(src);
+                    if (!resp.IsSuccessStatusCode) continue;
+                    var body = (await resp.Content.ReadAsStringAsync()).Trim();
+                    // Validate it looks like an IPv4 or IPv6 address before accepting
+                    if (System.Net.IPAddress.TryParse(body, out _)) return body;
+                }
+                catch
+                {
+                    // Try next source
+                }
+            }
+            return null;
+        }
+
+        /// <summary>
         /// Proxies to Worker /server/activity-feed using server credentials. Admin only.
         /// </summary>
         public async Task<object> Get(GetActivityFeed request)
@@ -385,6 +536,29 @@ namespace CommunityComments.Api
         private static object DeserializeJson(string json)
         {
             return JsonSerializer.Deserialize<System.Collections.Generic.Dictionary<string, object>>(json);
+        }
+
+        /// <summary>
+        /// Returns a safe image MIME type if <paramref name="bytes"/> matches a known
+        /// raster-image magic byte signature, otherwise null. Used to gate avatar blobs
+        /// rendered in cross-server &lt;img src&gt; tags — SVG, HTML, and unknown types must
+        /// be rejected because they can carry executable content.
+        /// </summary>
+        private static string SniffSafeImageType(byte[] bytes)
+        {
+            if (bytes == null || bytes.Length < 12) return null;
+            // JPEG: FF D8 FF
+            if (bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF) return "image/jpeg";
+            // PNG: 89 50 4E 47 0D 0A 1A 0A
+            if (bytes[0] == 0x89 && bytes[1] == 0x50 && bytes[2] == 0x4E && bytes[3] == 0x47
+                && bytes[4] == 0x0D && bytes[5] == 0x0A && bytes[6] == 0x1A && bytes[7] == 0x0A) return "image/png";
+            // GIF: "GIF87a" or "GIF89a"
+            if (bytes[0] == 0x47 && bytes[1] == 0x49 && bytes[2] == 0x46 && bytes[3] == 0x38
+                && (bytes[4] == 0x37 || bytes[4] == 0x39) && bytes[5] == 0x61) return "image/gif";
+            // WEBP: "RIFF" .... "WEBP"
+            if (bytes[0] == 0x52 && bytes[1] == 0x49 && bytes[2] == 0x46 && bytes[3] == 0x46
+                && bytes[8] == 0x57 && bytes[9] == 0x45 && bytes[10] == 0x42 && bytes[11] == 0x50) return "image/webp";
+            return null;
         }
     }
 }
