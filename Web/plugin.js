@@ -668,20 +668,38 @@ define([], function () {
         var removingIds = Object.keys(currentMap).filter(function(id) { return !freshMap[id]; });
         removingIds.forEach(function(id) { animateRemoveComment(currentMap[id]); });
 
-        // 2. Insert new top-level comments at top (before first approved comment)
-        // Remove empty-state placeholder if real comments are coming in
+        // 2. Insert new top-level comments at the position dictated by fresh data
+        // order. Existing comments serve as positional anchors so a comment bumped
+        // up from a later page (e.g., after a delete reduces total below page-0
+        // capacity) lands at the bottom rather than the top.
         if (freshComments.length > 0) {
             var emptyEl = list.querySelector('.ec-empty');
             if (emptyEl) emptyEl.remove();
         }
         var insertRef = list.querySelector('.ec-c:not(.reply):not(.ec-awaiting)');
+        var lastAnchorEnd = null;
         freshComments.forEach(function(c) {
-            if (currentMap[c.CommentId]) return;
+            var existing = currentMap[c.CommentId];
+            if (existing) {
+                var endEl = existing;
+                var sib = existing.nextElementSibling;
+                while (sib && !(sib.classList.contains('ec-c') && !sib.classList.contains('reply'))) {
+                    endEl = sib;
+                    sib = sib.nextElementSibling;
+                }
+                lastAnchorEnd = endEl;
+                return;
+            }
+            // Capture refNode BEFORE appendComment — appendComment appends to the
+            // end of the list, so reading lastAnchorEnd.nextElementSibling after
+            // would point to one of the just-appended elements.
+            var refNode = lastAnchorEnd ? lastAnchorEnd.nextElementSibling : insertRef;
             var preCount = list.childElementCount;
             appendComment(section, list, c);
             var newEls = [];
             for (var i = preCount; i < list.childElementCount; i++) newEls.push(list.children[i]);
-            newEls.forEach(function(ne) { list.insertBefore(ne, insertRef); });
+            newEls.forEach(function(ne) { list.insertBefore(ne, refNode); });
+            lastAnchorEnd = newEls[newEls.length - 1];
             if (newEls[0]) {
                 newEls[0].classList.add('ec-inserting');
                 newEls[0].addEventListener('animationend', function() {
@@ -741,7 +759,10 @@ define([], function () {
             });
         });
 
-        if (freshData.total !== undefined) commentTotal = freshData.total;
+        if (freshData.total !== undefined) {
+            commentTotal = freshData.total;
+            updatePager(section);
+        }
         if (freshData.summary !== undefined) {
             renderSummary(section, freshData.summary, freshData.overallSummary, freshData.total, freshData.overallTotal);
         }
@@ -957,8 +978,16 @@ define([], function () {
                 ? '<div class="ec-gl-intro" style="background:rgba(231,76,60,0.12);border-color:rgba(231,76,60,0.35);color:#e74c3c">\u26A0\uFE0F Your posting access was suspended. Re-read these guidelines before you can post again, then accept them at the bottom.</div>'
                 : '<div class="ec-gl-intro">\uD83D\uDC47 Scroll through all guidelines to enable the accept button</div>') +
 
+            '<h3>\uD83C\uDF10 Before You Post</h3>' +
+            '<div class="ec-gl-notice">' +
+            '<p><strong>Posts are public across the entire network.</strong> Every comment and reply you submit is visible to every Community Comments user on every participating Emby server \u2014 not just users on your own server.</p>' +
+            '<p><strong>You see the whole community by default.</strong> The comments you read here are drawn from across all participating servers, unless your server administrator has enabled local-only mode for your server.</p>' +
+            '<p><strong>Every post is moderated.</strong> Comments and replies are screened by AI and reviewed by the Community Comments moderation team. Content that violates these guidelines will be denied and may trigger a ban.</p>' +
+            '<p style="margin-bottom:0"><strong>Once submitted, your comment lives in the ecosystem.</strong> The moment you post, the content is transmitted to the Community Comments servers, may be cached, and is retained for moderation review. Treat every submission as permanent \u2014 post with care.</p>' +
+            '</div>' +
+
             '<h3>\uD83E\uDD1D Community Standards</h3>' +
-            '<p>Community Comments is a space for discussing movies and TV shows. All posts are reviewed by AI before appearing publicly. By posting you agree to keep conversations respectful and on-topic.</p>' +
+            '<p>Community Comments is a space for discussing movies and TV shows. By posting you agree to keep conversations respectful and on-topic.</p>' +
 
             '<h3>\uD83D\uDEAB Prohibited Content</h3>' +
             '<div class="ec-gl-rules-grid">' +
@@ -1275,6 +1304,9 @@ define([], function () {
             '.ec-gl-ban-card.server { background:rgba(155,89,182,0.07); border:1px solid rgba(155,89,182,0.22); border-left:3px solid #9b59b6; }' +
             '.ec-gl-ban-card.server strong { color:#b07cd4; }' +
             '.ec-gl-callout { background:rgba(231,76,60,0.06); border:1px solid rgba(231,76,60,0.18); border-left:3px solid #e74c3c; border-radius:6px; font-size:0.93em; line-height:1.5; margin:0.35em 0 0; padding:0.65em 0.9em; }' +
+            '.ec-gl-notice { background:rgba(243,156,18,0.06); border:1px solid rgba(243,156,18,0.22); border-left:3px solid #f39c12; border-radius:6px; font-size:0.93em; line-height:1.5; margin:0.35em 0 0.75em; padding:0.65em 0.9em; }' +
+            '.ec-gl-notice p { margin:0 0 0.55em; }' +
+            '.ec-gl-notice p:last-child { margin-bottom:0; }' +
             '.ec-gl-footer { border-top:1px solid rgba(255,255,255,0.08); padding:0.85rem 1.25rem; }' +
             '.ec-gl-scroll-hint { color:rgba(150,150,170,0.6); font-size:0.87em; margin-bottom:0.5em; text-align:center; transition:opacity 0.4s; }' +
             '.ec-gl-accept-btn { background:rgba(46,204,113,0.07); border:1px solid rgba(46,204,113,0.2); border-radius:6px; color:#4a8a5e; cursor:not-allowed; font-size:0.93em; padding:0.55em 1.25em; transition:background 0.2s,border-color 0.2s,color 0.2s; width:100%; }' +
