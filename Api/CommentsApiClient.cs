@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Text.Encodings.Web;
@@ -25,13 +27,17 @@ namespace CommunityComments.Api
         private string WanAddress => Plugin.Instance.Configuration.WanAddress ?? string.Empty;
         private string EmbyApiKey => Plugin.Instance.Configuration.EmbyApiKey ?? string.Empty;
 
-        public async Task<string> RequestTokenAsync(string userKey, string displayName, string avatarBlob = null)
+        public async Task<string> RequestTokenAsync(string userKey, string displayName, string avatarBlob = null, IList<string> wanAddressCandidates = null)
         {
             var url = $"{ApiEndpoint}/token";
+            var candidates = (wanAddressCandidates != null && wanAddressCandidates.Count > 0)
+                ? wanAddressCandidates.ToArray()
+                : new[] { WanAddress };
             var payload = new
             {
                 ServerGuid = ServerGuid,
-                WanAddress = WanAddress,
+                WanAddress = candidates[0],
+                WanAddressCandidates = candidates,
                 ApiKey = EmbyApiKey,
                 UserKey = userKey,
                 DisplayName = displayName,

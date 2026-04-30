@@ -39,6 +39,19 @@ namespace CommunityComments
         /// </summary>
         public bool ServerLocalCommentsOnly { get; set; }
 
+        /// <summary>
+        /// Optional public host for the worker callback (e.g. "media.example.com" or "1.2.3.4").
+        /// When blank, falls back to auto-detected public IP / Emby's WanAddress host.
+        /// </summary>
+        public string PublicHost { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Optional public port for the worker callback. 0 = unset.
+        /// Required when the external port differs from Emby's internal HttpPort/HttpsPort
+        /// (NAT port mapping, reverse proxy, custom firewall rules).
+        /// </summary>
+        public int PublicPort { get; set; } = 0;
+
         public string GetDisplayName(string userId)
         {
             return UserDisplayNames.FirstOrDefault(e => e.UserId == userId)?.DisplayName ?? string.Empty;

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Net.Http;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -111,11 +112,11 @@ namespace CommunityComments.Api
                 }
             }
 
-            // Refresh the WAN address from Emby every time. Residential public IPs
-            // change without warning, and a stale WanAddress makes the worker time
-            // out trying to verify the server. /emby/System/Info reports the current
-            // value — pulling it here keeps config in sync and is cheap (localhost).
-            await RefreshWanAddressAsync(config);
+            // Build a list of WAN-address candidates the worker can probe. Emby's
+            // own WanAddress is unreliable behind NAT without UPnP, so we add
+            // public-IP-derived candidates (with UPnP-discovered port when
+            // possible) so the worker has multiple shots at finding our server.
+            var wanCandidates = await BuildWanAddressCandidatesAsync(config);
 
             // ServerId can be fetched without admin via public endpoint
             if (string.IsNullOrEmpty(config.ServerId))
@@ -178,7 +179,7 @@ namespace CommunityComments.Api
             // Now proxy to Worker /token
             try
             {
-                var json = await Plugin.Instance.ApiClient.RequestTokenAsync(request.UserKey, request.DisplayName, avatarBlob);
+                var json = await Plugin.Instance.ApiClient.RequestTokenAsync(request.UserKey, request.DisplayName, avatarBlob, wanCandidates);
                 return DeserializeJson(json);
             }
             catch (Exception ex)
@@ -343,59 +344,92 @@ namespace CommunityComments.Api
         }
 
         /// <summary>
-        /// Refreshes <see cref="PluginConfiguration.WanAddress"/> from the most
-        /// authoritative source we can find. Tries Emby's reported WanAddress first;
-        /// if Emby returns an empty value (common behind NAT without UPnP, double-NAT,
-        /// or with disabled remote-access discovery), falls back to detecting the
-        /// public IP from ipify and reuses the scheme/port from the existing
-        /// WanAddress so the user's port-forward setup is preserved.
+        /// Builds an ordered, deduped list of candidate WAN addresses to send to
+        /// the worker for verification. The worker probes each in parallel and
+        /// uses whichever responds first with a matching server Id, so a longer
+        /// list increases the chance of a hands-free first-install for users with
+        /// non-standard port forwards. The first non-null result also gets
+        /// written back to <see cref="PluginConfiguration.WanAddress"/> so the
+        /// admin UI shows our best guess.
         ///
-        /// Best-effort — every failure path is swallowed because the caller will
-        /// surface a more user-visible error if the address still ends up bad.
+        /// Order is intentional — most-authoritative-first. The worker probes
+        /// them all in parallel, so order is mainly about which gets stored as
+        /// the canonical WanAddress when ties happen.
+        ///
+        /// Best-effort throughout — a single failed source never blocks others.
         /// </summary>
-        private async Task RefreshWanAddressAsync(PluginConfiguration config)
+        private async Task<IList<string>> BuildWanAddressCandidatesAsync(PluginConfiguration config)
         {
+            var ordered = new List<string>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            void Add(string addr)
+            {
+                if (string.IsNullOrWhiteSpace(addr)) return;
+                var trimmed = addr.TrimEnd('/');
+                if (seen.Add(trimmed)) ordered.Add(trimmed);
+            }
+
             try
             {
-                // 1) Ask Emby — fastest and most accurate when it works
-                var embyReported = await TryGetEmbyWanAddressAsync(config);
-                if (!string.IsNullOrEmpty(embyReported))
+                // 0) Manual override — fully deterministic, beats all auto-detection.
+                //    Both http and https variants since the admin's reverse proxy may
+                //    terminate TLS independently of Emby's EnableHttps.
+                if (config.PublicPort > 0)
                 {
-                    if (!string.Equals(config.WanAddress, embyReported, StringComparison.Ordinal))
+                    var overrideHost = !string.IsNullOrWhiteSpace(config.PublicHost)
+                        ? config.PublicHost.Trim()
+                        : await TryGetPublicIpAsync()
+                          ?? ExtractHost(config.WanAddress);
+                    if (!string.IsNullOrEmpty(overrideHost))
                     {
-                        config.WanAddress = embyReported;
-                        Plugin.Instance.SaveConfiguration();
+                        Add($"https://{overrideHost}:{config.PublicPort}");
+                        Add($"http://{overrideHost}:{config.PublicPort}");
                     }
-                    return;
                 }
 
-                // 2) Fall back to public-IP detection
+                // 1) Ask Emby — most accurate when its WAN detection works
+                var embyReported = await TryGetEmbyWanAddressAsync(config);
+                Add(embyReported);
+
+                // 2) Public IP from ipify combined with the ports Emby is actually
+                //    listening on. Covers the (very common) 1:1 port-forward case
+                //    AND HTTPS-enabled servers without needing UPnP discovery.
                 var publicIp = await TryGetPublicIpAsync();
-                if (string.IsNullOrEmpty(publicIp)) return;
+                if (!string.IsNullOrEmpty(publicIp))
+                {
+                    Add($"http://{publicIp}:{_appHost.HttpPort}");
+                    if (_appHost.EnableHttps && _appHost.HttpsPort > 0)
+                    {
+                        Add($"https://{publicIp}:{_appHost.HttpsPort}");
+                    }
 
-                // Preserve scheme + port from the previous WanAddress when present.
-                // The user's port-forward config is encoded there; we don't know it
-                // from anywhere else. If no prior value exists, default to
-                // http://<ip>:<emby-http-port>.
-                string newWan;
-                if (!string.IsNullOrEmpty(config.WanAddress)
-                    && Uri.TryCreate(config.WanAddress, UriKind.Absolute, out var existingUri))
-                {
-                    var portPart = existingUri.IsDefaultPort ? string.Empty : ":" + existingUri.Port;
-                    newWan = $"{existingUri.Scheme}://{publicIp}{portPart}";
-                }
-                else
-                {
-                    newWan = $"http://{publicIp}:{_appHost.HttpPort}";
+                    // 3) Public IP + the port from any previously-stored WanAddress.
+                    //    Captures the user's deliberate port choice across IP rotations.
+                    if (!string.IsNullOrEmpty(config.WanAddress)
+                        && Uri.TryCreate(config.WanAddress, UriKind.Absolute, out var existingUri)
+                        && !existingUri.IsDefaultPort)
+                    {
+                        Add($"{existingUri.Scheme}://{publicIp}:{existingUri.Port}");
+                    }
                 }
 
-                if (!string.Equals(config.WanAddress, newWan, StringComparison.Ordinal))
-                {
-                    config.WanAddress = newWan;
-                    Plugin.Instance.SaveConfiguration();
-                }
+                // 4) Last-resort fallback: whatever we had stored. Lets us at
+                //    least try the previous address if all other sources failed.
+                if (!string.IsNullOrEmpty(config.WanAddress)) Add(config.WanAddress);
             }
             catch { /* best effort */ }
+
+            // Persist the top candidate so the admin UI / config XML stays current.
+            if (ordered.Count > 0
+                && !string.Equals(config.WanAddress, ordered[0], StringComparison.Ordinal))
+            {
+                config.WanAddress = ordered[0];
+                Plugin.Instance.SaveConfiguration();
+            }
+
+            // Cap so we don't blow up the worker probe count
+            if (ordered.Count > 6) ordered = ordered.GetRange(0, 6);
+            return ordered;
         }
 
         private async Task<string> TryGetEmbyWanAddressAsync(PluginConfiguration config)
@@ -418,6 +452,12 @@ namespace CommunityComments.Api
             {
                 return null;
             }
+        }
+
+        private static string ExtractHost(string url)
+        {
+            if (string.IsNullOrWhiteSpace(url)) return null;
+            return Uri.TryCreate(url, UriKind.Absolute, out var u) ? u.Host : null;
         }
 
         private static async Task<string> TryGetPublicIpAsync()

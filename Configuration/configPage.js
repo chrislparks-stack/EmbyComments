@@ -56,6 +56,10 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
     function hasChanges(instance) {
         var chk = instance.view.querySelector('#chkServerLocalOnly');
         if (chk && chk.checked !== !!instance.originalLocalOnly) return true;
+        var hostEl = instance.view.querySelector('#txtPublicHost');
+        if (hostEl && hostEl.value.trim() !== (instance.originalPublicHost || '')) return true;
+        var portEl = instance.view.querySelector('#txtPublicPort');
+        if (portEl && (parseInt(portEl.value, 10) || 0) !== (instance.originalPublicPort || 0)) return true;
         var inputs = instance.view.querySelectorAll('input[data-user-id]');
         for (var i = 0; i < inputs.length; i++) {
             if (inputs[i].value.trim() !== (instance.originalValues[inputs[i].dataset.userId] || '')) return true;
@@ -70,6 +74,10 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
         });
         var chk = instance.view.querySelector('#chkServerLocalOnly');
         instance.originalLocalOnly = chk ? chk.checked : false;
+        var hostEl = instance.view.querySelector('#txtPublicHost');
+        instance.originalPublicHost = hostEl ? hostEl.value.trim() : '';
+        var portEl = instance.view.querySelector('#txtPublicPort');
+        instance.originalPublicPort = portEl ? (parseInt(portEl.value, 10) || 0) : 0;
     }
 
     function setNameStatus(warning, status, reason) {
@@ -673,6 +681,10 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
                     instance.apiEndpoint = config.ApiEndpoint;
                     var chk = view.querySelector('#chkServerLocalOnly');
                     if (chk) chk.checked = !!config.ServerLocalCommentsOnly;
+                    var hostEl = view.querySelector('#txtPublicHost');
+                    if (hostEl) hostEl.value = config.PublicHost || '';
+                    var portEl = view.querySelector('#txtPublicPort');
+                    if (portEl) portEl.value = config.PublicPort ? String(config.PublicPort) : '';
                     var entries = config.UserDisplayNames || [];
 
                     // Auto-populate avatar paths for users that don't have one stored
@@ -777,9 +789,17 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
                 }
             });
 
+            var hostInput = view.querySelector('#txtPublicHost');
+            var portInput = view.querySelector('#txtPublicPort');
+            var publicHost = hostInput ? hostInput.value.trim() : '';
+            var publicPortRaw = portInput ? parseInt(portInput.value, 10) : 0;
+            var publicPort = (isFinite(publicPortRaw) && publicPortRaw > 0 && publicPortRaw <= 65535) ? publicPortRaw : 0;
+
             ApiClient.getPluginConfiguration(pluginId).then(function (config) {
                 config.UserDisplayNames = entries;
                 config.ServerLocalCommentsOnly = !!view.querySelector('#chkServerLocalOnly').checked;
+                config.PublicHost = publicHost;
+                config.PublicPort = publicPort;
                 return ApiClient.updatePluginConfiguration(pluginId, config);
             }).then(function () {
                 return syncDisplayNamesToWorker(instance, inputs);
@@ -820,6 +840,15 @@ define(['baseView', 'loading', 'emby-input', 'emby-button', 'emby-scroller'], fu
                 if (saveBtn) saveBtn.disabled = !hasChanges(instance);
             });
         }
+        ['#txtPublicHost', '#txtPublicPort'].forEach(function (sel) {
+            var el = view.querySelector(sel);
+            if (el) {
+                el.addEventListener('input', function () {
+                    var saveBtn = view.querySelector('.btnSaveAll');
+                    if (saveBtn) saveBtn.disabled = !hasChanges(instance);
+                });
+            }
+        });
         var loadMoreBtn = view.querySelector('.btnLoadMoreActivity');
         if (loadMoreBtn) {
             loadMoreBtn.addEventListener('click', function () {

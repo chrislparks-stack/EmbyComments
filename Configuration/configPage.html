@@ -29,6 +29,21 @@
                     </label>
                 </div>
 
+                <div style="margin-bottom: 1.5em;">
+                    <div style="font-weight: bold; margin-bottom: 0.25em;">Public Server Address (Advanced)</div>
+                    <div style="font-size: 0.85em; color: var(--theme-text-color-secondary, #aaa); margin-bottom: 0.75em;">
+                        Only set these if your server uses a custom external port (NAT port forwarding, reverse proxy, etc.) that auto-detection can't find. Leave blank for a standard setup.
+                    </div>
+                    <label style="display: block; margin-bottom: 0.5em;">
+                        <span style="display: block; font-size: 0.85em; margin-bottom: 0.25em;">Public Host (optional)</span>
+                        <input type="text" id="txtPublicHost" class="emby-input" placeholder="auto-detect" style="width: 100%; max-width: 360px;" />
+                    </label>
+                    <label style="display: block;">
+                        <span style="display: block; font-size: 0.85em; margin-bottom: 0.25em;">Public Port</span>
+                        <input type="number" id="txtPublicPort" class="emby-input" min="0" max="65535" placeholder="0 = auto" style="width: 100%; max-width: 360px;" />
+                    </label>
+                </div>
+
                 <div class="communityCommentsUserList" style="margin-bottom: 1.5em;">
                     <p style="color: var(--theme-text-color-secondary, #aaa);">Loading users...</p>
                 </div>
